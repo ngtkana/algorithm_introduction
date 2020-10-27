@@ -30,6 +30,14 @@ impl BinaryHeap {
             self.max_heapify(largest);
         }
     }
+    pub fn build(a: &[u32]) -> Self {
+        let mut me = Self {
+            heap_size: a.len(),
+            a: std::iter::once(0).chain(a.iter().copied()).collect(),
+        };
+        me.build_max();
+        me
+    }
     pub fn build_max(&mut self) {
         self.heap_size = self.a.len() - 1;
         for i in (1..=self.a.len() / 2).rev() {
@@ -80,6 +88,15 @@ pub struct DArrayHeap {
     heap_size: usize,
 }
 impl DArrayHeap {
+    pub fn build(a: &[u32], d: usize) -> Self {
+        let mut me = Self {
+            heap_size: a.len(),
+            a: a.to_vec(),
+            d,
+        };
+        me.build_max_heap();
+        me
+    }
     pub fn max_heapify(&mut self, i: usize) {
         let mut largest = i;
         for j in (self.d * i + 1..=self.d * (i + 1)).take_while(|&j| j < self.heap_size) {
