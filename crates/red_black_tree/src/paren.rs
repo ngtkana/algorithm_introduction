@@ -15,7 +15,7 @@ impl<K: Ord + Debug, V: Debug> ParenInternal for RcNode<K, V> {
             Node::Internal(internal) => {
                 write!(w, "(")?;
                 internal.child(0).paren(w)?;
-                write!(w, "{:?}", internal.key())?;
+                write!(w, "{:?}", internal.color().paint(internal.key()))?;
                 internal.child(1).paren(w)?;
                 write!(w, ")")?;
             }
@@ -42,9 +42,7 @@ impl<K: Ord + Debug, V: Debug> Debug for RcNode<K, V> {
             .parent()
             .map(|p| WeakNode::upgrade(&p).unwrap())
         {
-            write!(w, "Some(")?;
-            ParenInternal::paren(&p, w)?;
-            write!(w, ")")?;
+            write!(w, "Some({:?})", p.as_ref().as_internal().unwrap().key())?;
         } else {
             write!(w, "None")?;
         }
