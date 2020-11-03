@@ -1,4 +1,5 @@
 use super::{
+    color::Color,
     node::{RcNode, WeakNode},
     RBTree,
 };
@@ -7,9 +8,11 @@ use std::fmt::Debug;
 pub trait Validate {
     fn reflexive_parent(&self);
     fn no_double_red(&self);
+    fn consistent_black_height(&self) -> u32;
     fn all(&self) {
         self.reflexive_parent();
         self.no_double_red();
+        self.consistent_black_height();
     }
 }
 
@@ -42,12 +45,26 @@ impl<K: Ord + Debug, V: Debug> Validate for RcNode<K, V> {
                 let child = RcNode::clone(&internal.child(i));
                 Validate::no_double_red(&child);
                 assert!(
-                    self.as_ref().is_black() || child.as_ref().is_black(),
+                    self.is_black() || child.is_black(),
                     "Double red: self = {:?}, child = {:?}",
                     &self,
                     &child,
                 );
             }
+        }
+    }
+    fn consistent_black_height(&self) -> u32 {
+        let self_ref = self.as_ref();
+        if let Some(internal) = self_ref.as_internal() {
+            let x = internal.child(0).consistent_black_height();
+            let y = internal.child(1).consistent_black_height();
+            assert_eq!(x, y, "Inconsistent black height: self = {:?}", &self,);
+            match internal.color() {
+                Color::Black => x + 1,
+                Color::Red => x,
+            }
+        } else {
+            0
         }
     }
 }
@@ -62,5 +79,8 @@ impl<K: Ord + Debug, V: Debug> Validate for RBTree<K, V> {
     }
     fn no_double_red(&self) {
         self.root.no_double_red()
+    }
+    fn consistent_black_height(&self) -> u32 {
+        self.root.consistent_black_height()
     }
 }

@@ -6,97 +6,6 @@ use std::{
     rc::{Rc, Weak},
 };
 
-pub enum Node<K, V> {
-    Internal(Internal<K, V>),
-    Nil(Nil<K, V>),
-}
-impl<K: Ord + Debug, V: Debug> Node<K, V> {
-    pub fn as_internal(&self) -> Option<&Internal<K, V>> {
-        match self {
-            Node::Internal(internal) => Some(internal),
-            Node::Nil(_) => None,
-        }
-    }
-    pub fn as_internal_mut(&mut self) -> Option<&mut Internal<K, V>> {
-        match self {
-            Node::Internal(internal) => Some(internal),
-            Node::Nil(_) => None,
-        }
-    }
-    pub fn is_nil(&self) -> bool {
-        match self {
-            Node::Internal(_) => false,
-            Node::Nil(_) => true,
-        }
-    }
-    pub fn is_red(&self) -> bool {
-        self.as_internal()
-            .map_or(false, |internal| internal.color == Color::Red)
-    }
-    pub fn is_black(&self) -> bool {
-        self.as_internal()
-            .map_or(true, |internal| internal.color == Color::Black)
-    }
-    pub fn set_color(&mut self, color: Color) {
-        let mut x = self.as_internal_mut().unwrap();
-        x.color = color;
-    }
-    pub fn parent(&self) -> Option<&WeakNode<K, V>> {
-        match self {
-            Node::Internal(internal) => internal.parent.as_ref(),
-            Node::Nil(nil) => nil.parent.as_ref(),
-        }
-    }
-    pub fn take_parent(&mut self) -> Option<WeakNode<K, V>> {
-        match self {
-            Node::Internal(ref mut internal) => replace(&mut internal.parent, None),
-            Node::Nil(ref mut nil) => replace(&mut nil.parent, None),
-        }
-    }
-    pub fn replace_parent(&mut self, x: WeakNode<K, V>) -> Option<WeakNode<K, V>> {
-        match self {
-            Node::Internal(ref mut internal) => replace(&mut internal.parent, Some(x)),
-            Node::Nil(ref mut nil) => replace(&mut nil.parent, Some(x)),
-        }
-    }
-}
-
-pub struct Internal<K, V> {
-    child: [RcNode<K, V>; 2],
-    parent: Option<WeakNode<K, V>>,
-    key: K,
-    value: V,
-    color: Color,
-}
-impl<K: Ord + Debug, V: Debug> Internal<K, V> {
-    pub fn key(&self) -> &K {
-        &self.key
-    }
-    pub fn color(&self) -> Color {
-        self.color
-    }
-    pub fn is_red(&self) -> bool {
-        self.color == Color::Red
-    }
-    pub fn is_black(&self) -> bool {
-        self.color == Color::Black
-    }
-    pub fn child(&self, i: usize) -> &RcNode<K, V> {
-        &self.child[i]
-    }
-    pub fn take_child(&mut self, i: usize) -> RcNode<K, V> {
-        let old = replace(&mut self.child[i], RcNode::nil());
-        old
-    }
-    pub fn replace_child(&mut self, i: usize, x: RcNode<K, V>) -> RcNode<K, V> {
-        let old = replace(&mut self.child[i], x);
-        old
-    }
-}
-pub struct Nil<K, V> {
-    parent: Option<WeakNode<K, V>>,
-}
-
 // -- RcNode
 pub struct RcNode<K, V>(Rc<RefCell<Node<K, V>>>);
 impl<K: Ord + Debug, V: Debug> Clone for RcNode<K, V> {
@@ -117,10 +26,8 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
         let weak = Self::downgrade(&x);
         match &mut *x.as_mut() {
             Node::Internal(internal) => {
-                internal.child[0]
-                    .as_mut()
-                    .replace_parent(WeakNode::clone(&weak));
-                internal.child[1].as_mut().replace_parent(weak);
+                internal.child[0].replace_parent(WeakNode::clone(&weak));
+                internal.child[1].replace_parent(weak);
             }
             Node::Nil(_) => unreachable!(),
         }
@@ -134,8 +41,50 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
             .as_internal()
             .map(|internal| RcNode::clone(internal.child(i)))
     }
+    pub fn clone_children(&self) -> Option<[RcNode<K, V>; 2]> {
+        let self_ref = self.as_ref();
+        self_ref.as_internal().map(|internal| {
+            [
+                RcNode::clone(internal.child(0)),
+                RcNode::clone(internal.child(1)),
+            ]
+        })
+    }
 
-    // -- observer
+    // -- is_nill
+    pub fn is_nil(&self) -> bool {
+        match &*self.as_ref() {
+            Node::Internal(_) => false,
+            Node::Nil(_) => true,
+        }
+    }
+    // -- color
+    pub fn is_red(&self) -> bool {
+        self.as_ref()
+            .as_internal()
+            .map_or(false, |internal| internal.color == Color::Red)
+    }
+    pub fn is_black(&self) -> bool {
+        self.as_ref()
+            .as_internal()
+            .map_or(true, |internal| internal.color == Color::Black)
+    }
+    pub fn color(&self) -> Color {
+        self.as_ref()
+            .as_internal()
+            .map_or(Color::Black, |internal| internal.color)
+    }
+    pub fn set_color(&mut self, color: Color) {
+        let mut x = self.as_mut();
+        x.as_internal_mut().unwrap().color = color;
+    }
+    pub fn swap_color(&mut self, x: &mut RcNode<K, V>) {
+        let self_color = self.color();
+        self.set_color(x.color());
+        x.set_color(self_color);
+    }
+
+    // -- parent
     pub fn index_parent(&self) -> Option<(usize, RcNode<K, V>)> {
         let self_mut = self.as_ref();
         self_mut.parent().map(|p| {
@@ -150,8 +99,7 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
         })
     }
     pub fn take_index_parent(&mut self) -> Option<(usize, RcNode<K, V>)> {
-        let mut self_mut = self.as_mut();
-        self_mut.take_parent().map(|p| {
+        self.take_parent().map(|p| {
             let p: RcNode<K, V> = WeakNode::upgrade(&p).unwrap();
             let i = match &*p.as_ref() {
                 Node::Internal(internal) => (0..2)
@@ -210,6 +158,18 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
     }
 
     // -- deformation
+    pub fn take_parent(&mut self) -> Option<WeakNode<K, V>> {
+        match &mut *self.as_mut() {
+            Node::Internal(ref mut internal) => replace(&mut internal.parent, None),
+            Node::Nil(ref mut nil) => replace(&mut nil.parent, None),
+        }
+    }
+    pub fn replace_parent(&mut self, x: WeakNode<K, V>) -> Option<WeakNode<K, V>> {
+        match &mut *self.as_mut() {
+            Node::Internal(ref mut internal) => replace(&mut internal.parent, Some(x)),
+            Node::Nil(ref mut nil) => replace(&mut nil.parent, Some(x)),
+        }
+    }
     pub fn connect(
         &mut self, /*Internal*/
         i: usize,
@@ -220,7 +180,7 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
             .as_internal_mut()
             .unwrap()
             .replace_child(i, RcNode::clone(x));
-        let old_parent = x.as_mut().replace_parent(RcNode::downgrade(self));
+        let old_parent = x.replace_parent(RcNode::downgrade(self));
         (old_child, old_parent)
     }
 
@@ -257,4 +217,65 @@ impl<K: Ord + Debug, V: Debug> Clone for WeakNode<K, V> {
 }
 fn rc_ref_cell<T>(x: T) -> Rc<RefCell<T>> {
     Rc::new(RefCell::new(x))
+}
+
+pub enum Node<K, V> {
+    Internal(Internal<K, V>),
+    Nil(Nil<K, V>),
+}
+impl<K: Ord + Debug, V: Debug> Node<K, V> {
+    pub fn as_internal(&self) -> Option<&Internal<K, V>> {
+        match self {
+            Node::Internal(internal) => Some(internal),
+            Node::Nil(_) => None,
+        }
+    }
+    pub fn as_internal_mut(&mut self) -> Option<&mut Internal<K, V>> {
+        match self {
+            Node::Internal(internal) => Some(internal),
+            Node::Nil(_) => None,
+        }
+    }
+    pub fn parent(&self) -> Option<&WeakNode<K, V>> {
+        match self {
+            Node::Internal(internal) => internal.parent.as_ref(),
+            Node::Nil(nil) => nil.parent.as_ref(),
+        }
+    }
+}
+
+pub struct Internal<K, V> {
+    child: [RcNode<K, V>; 2],
+    parent: Option<WeakNode<K, V>>,
+    key: K,
+    value: V,
+    color: Color,
+}
+impl<K: Ord + Debug, V: Debug> Internal<K, V> {
+    pub fn key(&self) -> &K {
+        &self.key
+    }
+    pub fn color(&self) -> Color {
+        self.color
+    }
+    pub fn is_red(&self) -> bool {
+        self.color == Color::Red
+    }
+    pub fn is_black(&self) -> bool {
+        self.color == Color::Black
+    }
+    pub fn child(&self, i: usize) -> &RcNode<K, V> {
+        &self.child[i]
+    }
+    pub fn take_child(&mut self, i: usize) -> RcNode<K, V> {
+        let old = replace(&mut self.child[i], RcNode::nil());
+        old
+    }
+    pub fn replace_child(&mut self, i: usize, x: RcNode<K, V>) -> RcNode<K, V> {
+        let old = replace(&mut self.child[i], x);
+        old
+    }
+}
+pub struct Nil<K, V> {
+    parent: Option<WeakNode<K, V>>,
 }
