@@ -1,21 +1,18 @@
 mod paren;
+pub mod validate;
 
 use dbg::msg;
 use std::{cmp::Ordering, fmt::Debug, mem::replace};
+use yansi::Paint;
 
 pub struct RBTree<K, V>(BoxedNode<K, V>);
-
-struct Node<K, V> {
-    child: [BoxedNode<K, V>; 2],
-    key: K,
-    value: V,
-}
 impl<K: Ord + Debug, V: Debug> RBTree<K, V> {
     pub fn new() -> Self {
         Self(BoxedNode(None))
     }
     pub fn insert(&mut self, k: K, v: V) {
         self.0.insert(k, v);
+        self.0.set_color(Color::Black);
     }
     pub fn delete(&mut self, k: K) -> bool {
         self.0.delete(k).is_some()
@@ -37,19 +34,53 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
             child: [Self(None), Self(None)],
             key: k,
             value: v,
+            color: Color::Red,
         })))
     }
 
-    // me and child
+    // -- color
+    fn color(&self) -> Color {
+        self.0.as_ref().map_or(Color::Black, |x| x.color)
+    }
+    fn is_red(&self) -> bool {
+        self.color() == Color::Red
+    }
+    fn is_black(&self) -> bool {
+        self.color() == Color::Black
+    }
+    fn set_color(&mut self, color: Color) {
+        self.0.as_mut().unwrap().color = color;
+    }
+    fn swap_color_with_child(&mut self, i: usize) {
+        let color = self.color();
+        self.set_color(self.child(i).color());
+        self.child_mut(i).set_color(color);
+    }
+    fn assert_red(&self) -> &Self {
+        assert!(self.is_red());
+        self
+    }
+    fn assert_black(&self) -> &Self {
+        assert!(self.is_black());
+        self
+    }
+
+    // -- me and child
     fn assert_isolated(self) -> Self {
         assert!((0..2).all(|i| self.0.as_ref().unwrap().child[i].0.is_none()));
         self
+    }
+    fn child(&self, i: usize) -> &Self {
+        &self.0.as_ref().unwrap().child[i]
+    }
+    fn child_mut(&mut self, i: usize) -> &mut Self {
+        &mut self.0.as_mut().unwrap().child[i]
     }
     fn replace_child(&mut self, i: usize, x: Self) -> Self {
         replace(&mut self.0.as_mut().unwrap().child[i], x)
     }
     fn take_child(&mut self, i: usize) -> Self {
-        replace(&mut self.0.as_mut().unwrap().child[i], Self(None))
+        Self(self.0.as_mut().unwrap().child[i].0.take())
     }
     fn replace_empty_child(&mut self, i: usize, x: Self) {
         assert!(self.replace_child(i, x).0.is_none());
@@ -61,13 +92,33 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         replace(self, Self(child)).assert_isolated()
     }
 
+    // -- deformatinos
+    fn rotate(&mut self, i: usize) {
+        let mut x = replace(self, Self(None));
+        let mut y = x.take_child(i);
+        x.replace_empty_child(i, y.take_child(1 - i));
+        y.replace_empty_child(1 - i, x);
+        *self = y;
+    }
+    fn swap_color_rotate(&mut self, i: usize) {
+        self.swap_color_with_child(i);
+        self.rotate(i);
+    }
+
     // -- rb operations
-    fn insert(&mut self, k: K, v: V) {
+    fn insert(&mut self, k: K, v: V) -> Option<DoubleRed> {
         if let Some(internal) = &mut self.0 {
             let i = if k <= internal.key { 0 } else { 1 };
-            internal.child[i].insert(k, v);
+            match internal.child[i].insert(k, v)? {
+                DoubleRed::Me => match internal.color {
+                    Color::Red => Some(DoubleRed::Child(i)),
+                    Color::Black => None,
+                },
+                DoubleRed::Child(j) => self.insert_fixup(i, j),
+            }
         } else {
             *self = Self::new(k, v);
+            Some(DoubleRed::Me)
         }
     }
     fn delete(&mut self, k: K) -> Option<Box<Node<K, V>>> {
@@ -89,6 +140,31 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         };
         internal.child[i].delete(k)
     }
+    fn insert_fixup(&mut self, i: usize, j: usize) -> Option<DoubleRed> {
+        msg!("insert_fixup", (&self, i, j));
+        self.assert_black()
+            .child(i)
+            .assert_red()
+            .child(j)
+            .assert_red();
+        match self.child(1 - i).color() {
+            Color::Red => {
+                self.set_color(Color::Red);
+                self.child_mut(i).set_color(Color::Black);
+                self.child_mut(1 - i).set_color(Color::Black);
+                Some(DoubleRed::Me)
+            }
+            Color::Black => {
+                if i == j {
+                    self.swap_color_rotate(i);
+                    None
+                } else {
+                    self.child_mut(i).rotate(j);
+                    self.insert_fixup(i, 1 - j)
+                }
+            }
+        }
+    }
     fn delete_first(&mut self) -> Option<Box<Node<K, V>>> {
         msg!("delete_first", &self);
         let res = self.0.as_mut()?.child[0].delete_first();
@@ -107,8 +183,34 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
     }
 }
 
+struct Node<K, V> {
+    child: [BoxedNode<K, V>; 2],
+    key: K,
+    value: V,
+    color: Color,
+}
+#[derive(Debug, Clone, PartialEq, Copy)]
+enum Color {
+    Red,
+    Black,
+}
+impl Color {
+    fn paint<T>(&self, x: T) -> Paint<T> {
+        match self {
+            Color::Red => Paint::red(x),
+            Color::Black => Paint::blue(x),
+        }
+        .bold()
+    }
+}
+enum DoubleRed {
+    Me,
+    Child(usize),
+}
+
 #[cfg(test)]
 mod tests {
+    use super::validate;
     use super::RBTree;
     use rand::prelude::*;
 
@@ -118,7 +220,18 @@ mod tests {
         test.insert(10);
         test.insert(12);
         test.insert(11);
-        test.delete(10);
+    }
+
+    #[test]
+    fn test_exhaustive_insert() {
+        use next_permutation::next_permutation;
+        let n = 7;
+        let mut perm = (0..n).collect::<Vec<u32>>();
+        while {
+            let mut test = Test::new();
+            perm.iter().for_each(|&x| test.insert(x));
+            next_permutation(&mut perm)
+        } {}
     }
 
     #[test]
@@ -152,6 +265,7 @@ mod tests {
             }
         }
         fn assert_eq(&self) {
+            validate::all(&self.rbt);
             println!("Comparing rbt = {:?}", &self.rbt);
             assert_eq!(
                 &self
