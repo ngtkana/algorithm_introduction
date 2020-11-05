@@ -1,7 +1,6 @@
 mod paren;
-mod validate;
+pub mod validate;
 
-use dbg::*;
 use std::{cmp::Ordering, fmt::Debug, mem::replace};
 use yansi::Paint;
 
@@ -13,11 +12,10 @@ impl<K: Ord + Debug, V: Debug> RBTree<K, V> {
     pub fn insert(&mut self, k: K, v: V) {
         self.0.insert(k, v);
         self.0.set_color(Color::Black);
-        validate::all(self);
     }
     pub fn remove(&mut self, k: K) -> bool {
         let res = self.0.remove(k).is_some();
-        validate::all(self);
+        self.0.set_color(Color::Black);
         res
     }
     pub fn collect(&self) -> Vec<(K, V)>
@@ -82,10 +80,21 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         let internal = self.as_internal_mut().unwrap();
         internal.color = color;
     }
+    fn swap_color(&mut self, other: &mut Self) {
+        let x = self.as_internal_mut().unwrap();
+        let y = other.as_internal_mut().unwrap();
+        std::mem::swap(&mut x.color, &mut y.color);
+    }
+    fn swap_color_with_child(&mut self, i: usize) {
+        let l = self.color();
+        let r = self.child(i).color();
+        self.set_color(r);
+        self.child_mut(i).set_color(l);
+    }
 
     // -- me and children
     fn replace(&mut self, x: Self) -> BoxedNode<K, V> {
-        replace(self, x)
+        std::mem::replace(self, x)
     }
     fn take(&mut self) -> BoxedNode<K, V> {
         self.replace(Self::nil())
@@ -112,7 +121,7 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         let internal = self.as_internal_mut().unwrap();
         assert!(internal.child[1 - i].is_nil());
         let child = internal.child[i].take();
-        replace(self, child)
+        replace(self, child).assert_isolated()
     }
 
     // -- assertions
@@ -137,13 +146,17 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
     }
 
     // -- deformations
-    fn rotate(self, i: usize) -> Self {
-        let mut x = self;
+    fn rotate(&mut self, i: usize) {
+        let mut x = self.take();
         let mut y = x.take_child(i);
         let z = y.take_child(1 - i);
         x.replace_empty_child(i, z);
         y.replace_empty_child(1 - i, x);
-        y
+        *self = y;
+    }
+    fn swap_color_rotate(&mut self, i: usize) {
+        self.swap_color_with_child(i);
+        self.rotate(i);
     }
 
     // -- rb algorithms
@@ -166,7 +179,6 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         }
     }
     fn insert_fixup(&mut self, i: usize, j: usize) -> Option<DoubleRed> {
-        msg!("insert_fixup", (&self, i, j));
         self.assert_black()
             .child(i)
             .assert_red()
@@ -181,41 +193,83 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
             }
             Color::Black => {
                 if i == j {
-                    self.set_color(Color::Red);
-                    self.child_mut(i).set_color(Color::Black);
-                    let me = self.take();
-                    *self = me.rotate(i);
+                    self.swap_color_rotate(i);
                     None
                 } else {
-                    let mut x = self.take_child(i);
-                    x = x.rotate(j);
-                    self.replace_empty_child(i, x);
+                    self.child_mut(i).rotate(j);
                     self.insert_fixup(i, 1 - j)
                 }
             }
         }
     }
-    fn remove(&mut self, k: K) -> Option<Self> {
+    fn remove(&mut self, k: K) -> Option<(Self, Option<Charge>)> {
         let internal = self.as_internal_mut()?;
-        match k.cmp(&internal.key) {
-            Ordering::Equal => Some(if let Some(mut next) = internal.child[1].remove_first() {
-                next.replace_empty_child(0, self.take_child(0));
-                next.replace_empty_child(1, self.take_child(1));
-                self.replace(next)
-            } else {
-                self.replace_with_my_child(0)
-            }),
-            Ordering::Less => internal.child[0].remove(k),
-            Ordering::Greater => internal.child[1].remove(k),
-        }
-        .map(|x| x.assert_isolated())
+        let i = match k.cmp(&internal.key) {
+            Ordering::Equal => {
+                return Some(
+                    if let Some((mut next, e)) = internal.child[1].remove_first() {
+                        self.swap_color(&mut next);
+                        next.replace_empty_child(0, self.take_child(0));
+                        next.replace_empty_child(1, self.take_child(1));
+                        (self.replace(next), e.and_then(|_| self.remove_fixup(1)))
+                    } else {
+                        let removed = self.replace_with_my_child(0).assert_isolated();
+                        let charged = removed.is_black();
+                        (removed, if charged { Some(Charge()) } else { None })
+                    },
+                )
+            }
+            Ordering::Less => 0,
+            Ordering::Greater => 1,
+        };
+        let (removed, charge) = internal.child[i].remove(k)?;
+        Some((removed, charge.and_then(|_| self.remove_fixup(i))))
     }
-    fn remove_first(&mut self) -> Option<Self> {
+    fn remove_fixup(&mut self, i: usize) -> Option<Charge> {
+        match self.child(i).color() {
+            Color::Red => {
+                self.child_mut(i).set_color(Color::Black);
+                None
+            }
+            Color::Black => match self.child(1 - i).color() {
+                Color::Red => {
+                    self.swap_color_rotate(1 - i);
+                    self.child_mut(i)
+                        .remove_fixup(i)
+                        .and_then(|Charge()| self.remove_fixup(i))
+                }
+                Color::Black => match (
+                    self.child(1 - i).child(i).color(),
+                    self.child(1 - i).child(1 - i).color(),
+                ) {
+                    (Color::Black, Color::Black) => {
+                        self.child_mut(1 - i).set_color(Color::Red);
+                        Some(Charge())
+                    }
+                    (Color::Red, Color::Black) => {
+                        self.child_mut(1 - i).swap_color_rotate(i);
+                        self.remove_fixup(i)
+                    }
+                    (_, Color::Red) => {
+                        self.child_mut(1 - i)
+                            .child_mut(1 - i)
+                            .set_color(Color::Black);
+                        self.swap_color_rotate(1 - i);
+                        None
+                    }
+                },
+            },
+        }
+    }
+    fn remove_first(&mut self) -> Option<(Self, Option<Charge>)> {
         Some(
-            self.as_internal_mut()?.child[0]
-                .remove_first()
-                .unwrap_or_else(|| self.take())
-                .assert_isolated(),
+            if let Some((x, e)) = self.as_internal_mut()?.child[0].remove_first() {
+                (x, e.and_then(|Charge()| self.remove_fixup(0)))
+            } else {
+                let removed = self.replace_with_my_child(1).assert_isolated();
+                let charged = removed.is_black();
+                (removed, if charged { Some(Charge()) } else { None })
+            },
         )
     }
 }
@@ -229,7 +283,7 @@ struct Internal<K, V> {
     value: V,
     color: Color,
 }
-#[derive(Debug, Clone, PartialEq, Copy, Eq)]
+#[derive(Clone, PartialEq, Copy)]
 enum Color {
     Red,
     Black,
@@ -247,49 +301,13 @@ enum DoubleRed {
     Me,
     Child(usize),
 }
+struct Charge();
 
 #[cfg(test)]
 mod tests {
-    use super::RBTree;
+    use super::{validate, RBTree};
     use rand::prelude::*;
     use span::Span;
-
-    fn print(rbt: &RBTree<u32, ()>) {
-        println!("rbt = {:?}", &rbt);
-    }
-
-    fn compare(rbt: &RBTree<u32, ()>, vec: &[u32]) {
-        assert_eq!(
-            rbt.collect()
-                .iter()
-                .map(|&(k, _)| k)
-                .collect::<Vec<_>>()
-                .as_slice(),
-            vec
-        );
-    }
-
-    fn insert(k: u32, rbt: &mut RBTree<u32, ()>, vec: &mut Vec<u32>) {
-        println!("Insert {:?}.", &k);
-        rbt.insert(k, ());
-        let lb = vec.lower_bound(&k);
-        vec.insert(lb, k);
-        print(rbt);
-        compare(rbt, vec);
-        println!();
-    }
-
-    fn remove(k: u32, rbt: &mut RBTree<u32, ()>, vec: &mut Vec<u32>) {
-        println!("Remove {:?}.", &k);
-        rbt.remove(k);
-        let lb = vec.lower_bound(&k);
-        if vec.get(lb).map_or(false, |x| x == &k) {
-            vec.remove(lb);
-        }
-        print(rbt);
-        compare(rbt, vec);
-        println!();
-    }
 
     #[test]
     fn test_hand_insert_delete() {
@@ -322,10 +340,9 @@ mod tests {
         x.replace_empty_child(0, y);
         x.replace_empty_child(1, r);
 
-        let before = x;
-        println!("Before: {:?}", &before);
-        let after = before.rotate(0);
-        println!("After: {:?}", &after);
+        println!("Before: {:?}", &x);
+        x.rotate(0);
+        println!("After: {:?}", &x);
     }
 
     #[test]
@@ -356,19 +373,27 @@ mod tests {
         x.replace_empty_child(0, l);
         x.replace_empty_child(1, y);
 
-        let before = x;
-        println!("Before: {:?}", &before);
-        let after = before.rotate(1);
-        println!("After: {:?}", &after);
+        println!("Before: {:?}", &x);
+        x.rotate(1);
+        println!("After: {:?}", &x);
     }
 
     #[test]
-    fn test_rand() {
-        let mut rng = StdRng::seed_from_u64(42);
-        for _ in 0..20 {
+    fn test_rand_small() {
+        test_rand(2000, 20, 42);
+    }
+
+    #[test]
+    fn test_rand_large() {
+        test_rand(20, 100, 42);
+    }
+
+    fn test_rand(t: u32, q: u32, seed: u64) {
+        let mut rng = StdRng::seed_from_u64(seed);
+        for _ in 0..t {
             let mut rbt = RBTree::new();
             let mut vec = Vec::new();
-            for _ in 0..200 {
+            for _ in 0..q {
                 match rng.gen_range(0, 2) {
                     0 => {
                         let key = rng.gen_range(0, 30);
@@ -382,5 +407,41 @@ mod tests {
                 }
             }
         }
+    }
+
+    fn print(rbt: &RBTree<u32, ()>) {
+        println!("rbt = {:?}", &rbt);
+    }
+    fn compare(rbt: &RBTree<u32, ()>, vec: &[u32]) {
+        assert_eq!(
+            rbt.collect()
+                .iter()
+                .map(|&(k, _)| k)
+                .collect::<Vec<_>>()
+                .as_slice(),
+            vec
+        );
+    }
+    fn insert(k: u32, rbt: &mut RBTree<u32, ()>, vec: &mut Vec<u32>) {
+        println!("Insert {:?}.", &k);
+        rbt.insert(k, ());
+        let lb = vec.lower_bound(&k);
+        vec.insert(lb, k);
+        print(rbt);
+        compare(rbt, vec);
+        println!();
+        validate::all(rbt);
+    }
+    fn remove(k: u32, rbt: &mut RBTree<u32, ()>, vec: &mut Vec<u32>) {
+        println!("Remove {:?}.", &k);
+        rbt.remove(k);
+        let lb = vec.lower_bound(&k);
+        if vec.get(lb).map_or(false, |x| x == &k) {
+            vec.remove(lb);
+        }
+        print(rbt);
+        compare(rbt, vec);
+        println!();
+        validate::all(rbt);
     }
 }
