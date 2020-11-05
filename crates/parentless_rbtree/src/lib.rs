@@ -39,6 +39,18 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
             value: v,
         })))
     }
+    fn as_internal(&self) -> Option<&Internal<K, V>> {
+        match &*self.0 {
+            Node::Nil => None,
+            Node::Internal(internal) => Some(internal),
+        }
+    }
+    fn as_internal_mut(&mut self) -> Option<&mut Internal<K, V>> {
+        match &mut *self.0 {
+            Node::Nil => None,
+            Node::Internal(internal) => Some(internal),
+        }
+    }
 
     // -- me and children
     fn replace(&mut self, x: Self) -> BoxedNode<K, V> {
@@ -47,15 +59,20 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
     fn take(&mut self) -> BoxedNode<K, V> {
         self.replace(Self::nil())
     }
+    fn replace_empty_child(&mut self, i: usize, x: Self) {
+        let internal = self.as_internal_mut().unwrap();
+        let old = internal.child[i].replace(x);
+        assert!(old.is_nil());
+    }
     fn replace_child(&mut self, i: usize, x: Self) -> BoxedNode<K, V> {
-        let internal = self.0.as_internal_mut().unwrap();
+        let internal = self.as_internal_mut().unwrap();
         internal.child[i].replace(x)
     }
     fn take_child(&mut self, i: usize) -> BoxedNode<K, V> {
         self.replace_child(i, Self::nil())
     }
     fn replace_with_my_child(&mut self, i: usize) -> BoxedNode<K, V> {
-        let internal = self.0.as_internal_mut().unwrap();
+        let internal = self.as_internal_mut().unwrap();
         assert!(internal.child[1 - i].is_nil());
         let child = internal.child[i].take();
         replace(self, child)
@@ -63,7 +80,7 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
 
     // -- assertions
     fn assert_isolated(self) -> Self {
-        let internal = self.0.as_internal().unwrap();
+        let internal = self.as_internal().unwrap();
         assert!(internal.child[0].is_nil());
         assert!(internal.child[1].is_nil());
         self
@@ -75,11 +92,21 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         K: Clone,
         V: Clone,
     {
-        if let Some(internal) = self.0.as_internal() {
+        if let Some(internal) = self.as_internal() {
             internal.child[0].collect(vec);
             vec.push((internal.key.clone(), internal.value.clone()));
             internal.child[1].collect(vec);
         }
+    }
+
+    // -- deformations
+    fn rotate(self, i: usize) -> Self {
+        let mut x = self;
+        let mut y = x.take_child(i);
+        let z = y.take_child(1 - i);
+        x.replace_empty_child(i, z);
+        y.replace_empty_child(1 - i, x);
+        y
     }
 
     // -- rb algorithms
@@ -94,11 +121,11 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         }
     }
     fn remove(&mut self, k: K) -> Option<Self> {
-        let internal = self.0.as_internal_mut()?;
+        let internal = self.as_internal_mut()?;
         match k.cmp(&internal.key) {
             Ordering::Equal => Some(if let Some(mut next) = internal.child[1].remove_first() {
-                next.replace_child(0, self.take_child(0));
-                next.replace_child(1, self.take_child(1));
+                next.replace_empty_child(0, self.take_child(0));
+                next.replace_empty_child(1, self.take_child(1));
                 self.replace(next)
             } else {
                 self.replace_with_my_child(0)
@@ -110,29 +137,16 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
     }
     fn remove_first(&mut self) -> Option<Self> {
         Some(
-            self.0.as_internal_mut()?.child[0]
+            self.as_internal_mut()?.child[0]
                 .remove_first()
-                .unwrap_or_else(|| self.take()),
+                .unwrap_or_else(|| self.take())
+                .assert_isolated(),
         )
     }
 }
 enum Node<K, V> {
     Internal(Internal<K, V>),
     Nil,
-}
-impl<K: Ord + Debug, V: Debug> Node<K, V> {
-    fn as_internal(&self) -> Option<&Internal<K, V>> {
-        match self {
-            Node::Nil => None,
-            Node::Internal(internal) => Some(internal),
-        }
-    }
-    fn as_internal_mut(&mut self) -> Option<&mut Internal<K, V>> {
-        match self {
-            Node::Nil => None,
-            Node::Internal(internal) => Some(internal),
-        }
-    }
 }
 struct Internal<K, V> {
     child: [BoxedNode<K, V>; 2],
@@ -199,6 +213,44 @@ mod tests {
         remove(10, &mut rbt, &mut vec);
         remove(12, &mut rbt, &mut vec);
         remove(13, &mut rbt, &mut vec);
+    }
+
+    #[test]
+    fn test_hand_rotation_left() {
+        use super::BoxedNode;
+        let l = BoxedNode::new(0, ());
+        let z = BoxedNode::new(2, ());
+        let r = BoxedNode::new(4, ());
+        let mut y = BoxedNode::new(1, ());
+        y.replace_empty_child(0, l);
+        y.replace_empty_child(1, z);
+        let mut x = BoxedNode::new(3, ());
+        x.replace_empty_child(0, y);
+        x.replace_empty_child(1, r);
+
+        let before = x;
+        println!("Before: {:?}", &before);
+        let after = before.rotate(0);
+        println!("After: {:?}", &after);
+    }
+
+    #[test]
+    fn test_hand_rotation_right() {
+        use super::BoxedNode;
+        let l = BoxedNode::new(0, ());
+        let z = BoxedNode::new(2, ());
+        let r = BoxedNode::new(4, ());
+        let mut y = BoxedNode::new(3, ());
+        y.replace_empty_child(0, z);
+        y.replace_empty_child(1, r);
+        let mut x = BoxedNode::new(1, ());
+        x.replace_empty_child(0, l);
+        x.replace_empty_child(1, y);
+
+        let before = x;
+        println!("Before: {:?}", &before);
+        let after = before.rotate(1);
+        println!("After: {:?}", &after);
     }
 
     #[test]
