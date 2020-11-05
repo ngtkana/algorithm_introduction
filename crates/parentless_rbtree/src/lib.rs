@@ -1,5 +1,7 @@
 mod paren;
+mod validate;
 
+use dbg::*;
 use std::{cmp::Ordering, fmt::Debug, mem::replace};
 use yansi::Paint;
 
@@ -10,9 +12,13 @@ impl<K: Ord + Debug, V: Debug> RBTree<K, V> {
     }
     pub fn insert(&mut self, k: K, v: V) {
         self.0.insert(k, v);
+        self.0.set_color(Color::Black);
+        validate::all(self);
     }
     pub fn remove(&mut self, k: K) -> bool {
-        self.0.remove(k).is_some()
+        let res = self.0.remove(k).is_some();
+        validate::all(self);
+        res
     }
     pub fn collect(&self) -> Vec<(K, V)>
     where
@@ -54,12 +60,41 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         }
     }
 
+    // -- color
+    fn color(&self) -> Color {
+        self.as_internal().map_or(Color::Black, |x| x.color)
+    }
+    fn is_red(&self) -> bool {
+        self.color() == Color::Red
+    }
+    fn is_black(&self) -> bool {
+        self.color() == Color::Black
+    }
+    fn assert_red(&self) -> &Self {
+        assert!(self.is_red());
+        self
+    }
+    fn assert_black(&self) -> &Self {
+        assert!(self.is_black());
+        self
+    }
+    fn set_color(&mut self, color: Color) {
+        let internal = self.as_internal_mut().unwrap();
+        internal.color = color;
+    }
+
     // -- me and children
     fn replace(&mut self, x: Self) -> BoxedNode<K, V> {
         replace(self, x)
     }
     fn take(&mut self) -> BoxedNode<K, V> {
         self.replace(Self::nil())
+    }
+    fn child(&self, i: usize) -> &BoxedNode<K, V> {
+        &self.as_internal().unwrap().child[i]
+    }
+    fn child_mut(&mut self, i: usize) -> &mut BoxedNode<K, V> {
+        &mut self.as_internal_mut().unwrap().child[i]
     }
     fn replace_empty_child(&mut self, i: usize, x: Self) {
         let internal = self.as_internal_mut().unwrap();
@@ -112,13 +147,51 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
     }
 
     // -- rb algorithms
-    fn insert(&mut self, k: K, v: V) {
+    fn insert(&mut self, k: K, v: V) -> Option<DoubleRed> {
         match &mut *self.0 {
             Node::Nil => {
                 *self = Self::new(k, v);
+                Some(DoubleRed::Me)
             }
             Node::Internal(ref mut internal) => {
-                internal.child[if k <= internal.key { 0 } else { 1 }].insert(k, v);
+                let i = if k <= internal.key { 0 } else { 1 };
+                match internal.child[i].insert(k, v)? {
+                    DoubleRed::Me => match self.color() {
+                        Color::Red => Some(DoubleRed::Child(i)),
+                        Color::Black => None,
+                    },
+                    DoubleRed::Child(j) => self.insert_fixup(i, j),
+                }
+            }
+        }
+    }
+    fn insert_fixup(&mut self, i: usize, j: usize) -> Option<DoubleRed> {
+        msg!("insert_fixup", (&self, i, j));
+        self.assert_black()
+            .child(i)
+            .assert_red()
+            .child(j)
+            .assert_red();
+        match self.child(1 - i).color() {
+            Color::Red => {
+                self.set_color(Color::Red);
+                self.child_mut(i).set_color(Color::Black);
+                self.child_mut(1 - i).set_color(Color::Black);
+                Some(DoubleRed::Me)
+            }
+            Color::Black => {
+                if i == j {
+                    self.set_color(Color::Red);
+                    self.child_mut(i).set_color(Color::Black);
+                    let me = self.take();
+                    *self = me.rotate(i);
+                    None
+                } else {
+                    let mut x = self.take_child(i);
+                    x = x.rotate(j);
+                    self.replace_empty_child(i, x);
+                    self.insert_fixup(i, 1 - j)
+                }
             }
         }
     }
@@ -156,6 +229,7 @@ struct Internal<K, V> {
     value: V,
     color: Color,
 }
+#[derive(Debug, Clone, PartialEq, Copy, Eq)]
 enum Color {
     Red,
     Black,
@@ -169,6 +243,10 @@ impl Color {
         .bold()
     }
 }
+enum DoubleRed {
+    Me,
+    Child(usize),
+}
 
 #[cfg(test)]
 mod tests {
@@ -180,7 +258,7 @@ mod tests {
         println!("rbt = {:?}", &rbt);
     }
 
-    fn validate(rbt: &RBTree<u32, ()>, vec: &[u32]) {
+    fn compare(rbt: &RBTree<u32, ()>, vec: &[u32]) {
         assert_eq!(
             rbt.collect()
                 .iter()
@@ -197,7 +275,7 @@ mod tests {
         let lb = vec.lower_bound(&k);
         vec.insert(lb, k);
         print(rbt);
-        validate(rbt, vec);
+        compare(rbt, vec);
         println!();
     }
 
@@ -209,12 +287,12 @@ mod tests {
             vec.remove(lb);
         }
         print(rbt);
-        validate(rbt, vec);
+        compare(rbt, vec);
         println!();
     }
 
     #[test]
-    fn test_hand() {
+    fn test_hand_insert_delete() {
         let mut rbt = RBTree::new();
         let mut vec = Vec::new();
 
@@ -248,6 +326,21 @@ mod tests {
         println!("Before: {:?}", &before);
         let after = before.rotate(0);
         println!("After: {:?}", &after);
+    }
+
+    #[test]
+    fn test_exhaustive_insert() {
+        use next_permutation::next_permutation;
+        let n = 7;
+        let mut perm = (0..n).collect::<Vec<u32>>();
+        while {
+            let mut rbt = RBTree::new();
+            let mut vec = Vec::new();
+            for &x in &perm {
+                insert(x, &mut rbt, &mut vec);
+            }
+            next_permutation(&mut perm)
+        } {}
     }
 
     #[test]

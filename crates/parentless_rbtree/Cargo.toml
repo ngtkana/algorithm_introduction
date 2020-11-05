@@ -9,5 +9,6 @@ edition = "2018"
 [dependencies]
 dbg = { git = "https://github.com/ngtkana/ac-adapter-rs.git", package = "dbg" }
 span = { git = "https://github.com/ngtkana/ac-adapter-rs.git", package = "span" }
+next_permutation = { git = "https://github.com/ngtkana/ac-adapter-rs.git", package = "next_permutation" }
 rand = "0.7.3"
 yansi = "0.5.0"
