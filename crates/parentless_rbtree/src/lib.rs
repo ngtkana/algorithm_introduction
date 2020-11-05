@@ -1,6 +1,7 @@
 mod paren;
 
 use std::{cmp::Ordering, fmt::Debug, mem::replace};
+use yansi::Paint;
 
 pub struct RBTree<K, V>(BoxedNode<K, V>);
 impl<K: Ord + Debug, V: Debug> RBTree<K, V> {
@@ -37,6 +38,7 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
             child: [Self::nil(), Self::nil()],
             key: k,
             value: v,
+            color: Color::Red,
         })))
     }
     fn as_internal(&self) -> Option<&Internal<K, V>> {
@@ -152,6 +154,20 @@ struct Internal<K, V> {
     child: [BoxedNode<K, V>; 2],
     key: K,
     value: V,
+    color: Color,
+}
+enum Color {
+    Red,
+    Black,
+}
+impl Color {
+    fn paint<T>(&self, x: T) -> Paint<T> {
+        match self {
+            Color::Red => Paint::red(x),
+            Color::Black => Paint::blue(x),
+        }
+        .bold()
+    }
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ impl<K: Ord + Debug, V: Debug> Paren for BoxedNode<K, V> {
             Node::Internal(internal) => {
                 write!(w, "(")?;
                 internal.child[0].paren(w)?;
-                write!(w, "{:?}", &internal.key)?;
+                write!(w, "{:?}", internal.color.paint(&internal.key))?;
                 internal.child[1].paren(w)?;
                 write!(w, ")")
             }
