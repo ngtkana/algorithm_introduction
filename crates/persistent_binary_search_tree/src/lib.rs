@@ -12,7 +12,8 @@ impl<K: Ord + Debug, V: Debug> PersistentRBTree<K, V> {
         Self(vec![RcNode(None)])
     }
     pub fn insert(&mut self, k: K, v: V) {
-        let root = self.0.last().unwrap().insert(k, v);
+        let (root, e) = self.0.last().unwrap().insert(k, v, true);
+        let root = root.clone_node().with_color(Color::Black).finish();
         self.0.push(root);
     }
     pub fn delete(&mut self, k: K) -> Option<Rc<(K, V)>> {
@@ -47,23 +48,29 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
     fn from_node(node: Node<K, V>) -> Self {
         Self(Some(Rc::new(node)))
     }
-    fn from_kv(k: K, v: V) -> Self {
+    fn new_node(k: K, v: V, color: Color) -> Self {
         Self::from_node(Node {
             child: [Self(None), Self(None)],
             kv: Rc::new((k, v)),
-            color: Color::Red,
+            color,
         })
     }
-    fn from_links(kv: Rc<(K, V)>, i: usize, l: RcNode<K, V>, r: RcNode<K, V>) -> Self {
-        Self::from_node(Node {
-            child: match i {
-                0 => [l, r],
-                1 => [r, l],
-                _ => panic!(),
-            },
-            kv,
-            color: Color::Red,
-        })
+
+    // -- unwrap
+    fn unwrap(&self) -> &Node<K, V> {
+        self.0.as_ref().unwrap()
+    }
+    fn clone_node(&self) -> Node<K, V> {
+        self.unwrap().clone()
+    }
+    fn child(&self, i: usize) -> &Self {
+        &self.unwrap().child[i]
+    }
+    fn clone_child(&self, i: usize) -> Self {
+        Self::clone(&self.child(i))
+    }
+    fn clone_child_node(&self, i: usize) -> Node<K, V> {
+        self.child(i).clone_node()
     }
 
     // -- color
@@ -76,56 +83,95 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
     fn is_black(&self) -> bool {
         self.color() == Color::Black
     }
+    fn assert_red(&self) -> &Self {
+        assert!(self.is_red());
+        self
+    }
+    fn assert_black(&self) -> &Self {
+        assert!(self.is_black());
+        self
+    }
+
+    // -- deformation
+    fn rotate(&self, i: usize) -> Self {
+        let mid = self.child(i).clone_child(1 - i);
+        let orig_root = self.clone_node().with_child(i, mid).finish();
+        self.child(i)
+            .clone_node()
+            .with_child(1 - i, orig_root)
+            .finish()
+    }
 
     // -- rb ops
-    fn insert(&self, k: K, v: V) -> RcNode<K, V> {
-        match self.0.as_ref() {
-            None => Self::from_kv(k, v),
+    fn insert(&self, k: K, v: V, is_root: bool) -> (RcNode<K, V>, Option<DoubleRed>) {
+        let res = match self.0.as_ref() {
+            None => (
+                Self::new_node(k, v, if is_root { Color::Black } else { Color::Red }),
+                Some(DoubleRed::Me),
+            ),
             Some(me) => {
                 let i = if k <= me.kv.0 { 0 } else { 1 };
-                Self::from_links(
-                    Rc::clone(&me.kv),
-                    i,
-                    me.child[i].insert(k, v),
-                    RcNode::clone(&me.child[1 - i]),
-                )
+                let (root, e) = me.child[i].insert(k, v, false);
+                let mut root = self.clone_node().with_child(i, root).finish();
+                let e = e.and_then(|e| match e {
+                    DoubleRed::Me => match self.color() {
+                        Color::Red => Some(DoubleRed::Child(i)),
+                        Color::Black => None,
+                    },
+                    DoubleRed::Child(j) => {
+                        let (new_root, new_e) = root.insert_fixup(i, j, is_root);
+                        root = new_root;
+                        new_e
+                    }
+                });
+                (root, e)
+            }
+        };
+        res
+    }
+    fn insert_fixup(&self, i: usize, j: usize, is_root: bool) -> (Self, Option<DoubleRed>) {
+        self.assert_black()
+            .child(i)
+            .assert_red()
+            .child(j)
+            .assert_red();
+        match self.child(1 - i).color() {
+            Color::Red => {
+                let c0 = self.child(0).clone_node().with_color(Color::Black).finish();
+                let c1 = self.child(1).clone_node().with_color(Color::Black).finish();
+                let x = self
+                    .clone_node()
+                    .with_color(Color::Red)
+                    .with_child(0, c0)
+                    .with_child(1, c1)
+                    .finish();
+                (x, Some(DoubleRed::Me))
+            }
+            Color::Black => {
+                if i == j {
+                    let y = self.clone_child_node(i).with_color(Color::Black).finish();
+                    let x = self
+                        .clone_node()
+                        .with_color(Color::Red)
+                        .with_child(i, y)
+                        .finish();
+                    let root = x.rotate(i);
+                    (root, None)
+                } else {
+                    let y = self.child(i).rotate(j);
+                    self.clone_node()
+                        .with_child(i, y)
+                        .finish()
+                        .insert_fixup(i, 1 - j, is_root)
+                }
             }
         }
     }
     fn delete(&self, k: K) -> Option<(RcNode<K, V>, Rc<(K, V)>)> {
-        let me = self.0.as_ref()?;
-        let cmp = k.cmp(&me.kv.0);
-        let i = match cmp {
-            Ordering::Equal => {
-                let child_res = me.child[1].delete_first();
-                let root = match child_res {
-                    Some((root, kv)) => Self::from_links(kv, 0, RcNode::clone(&me.child[0]), root),
-                    None => RcNode::clone(&me.child[0]),
-                };
-                return Some((root, Rc::clone(&me.kv)));
-            }
-            Ordering::Less => 0,
-            Ordering::Greater => 1,
-        };
-        me.child[i].delete(k).map(|(root, rem)| {
-            (
-                Self::from_links(Rc::clone(&me.kv), i, root, RcNode::clone(&me.child[1 - i])),
-                rem,
-            )
-        })
+        todo!()
     }
     fn delete_first(&self) -> Option<(RcNode<K, V>, Rc<(K, V)>)> {
-        let me = self.0.as_ref()?;
-        let child_res = me.child[0].delete_first();
-        let res = child_res
-            .map(|(root, kv)| {
-                (
-                    Self::from_links(Rc::clone(&me.kv), 0, root, RcNode::clone(&me.child[1])),
-                    kv,
-                )
-            })
-            .unwrap_or_else(|| (RcNode::clone(&me.child[1]), Rc::clone(&me.kv)));
-        Some(res)
+        todo!()
     }
     fn collect_vec(&self, vec: &mut Vec<(K, V)>)
     where
@@ -144,6 +190,34 @@ struct Node<K, V> {
     child: [RcNode<K, V>; 2],
     kv: Rc<(K, V)>,
     color: Color,
+}
+impl<K: Ord + Debug, V: Debug> Clone for Node<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            child: [RcNode::clone(&self.child[0]), RcNode::clone(&self.child[1])],
+            kv: Rc::clone(&self.kv),
+            color: self.color,
+        }
+    }
+}
+impl<K: Ord + Debug, V: Debug> Node<K, V> {
+    fn with_color(mut self, color: Color) -> Self {
+        self.color = color;
+        self
+    }
+    fn with_child(mut self, i: usize, x: RcNode<K, V>) -> Self {
+        self.child[i] = x;
+        self
+    }
+    fn finish(self) -> RcNode<K, V> {
+        RcNode(Some(Rc::new(self)))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Copy, Eq)]
+enum DoubleRed {
+    Me,
+    Child(usize),
 }
 
 #[cfg(test)]
@@ -227,7 +301,6 @@ mod tests {
         }
         fn insert(&mut self, k: u32) {
             println!("Insert {:?}", k);
-
             self.rbt.insert(k, ());
             let mut v = self.vec.last().unwrap().clone();
             let lb = v.binary_search(&k).map_or_else(|e| e, |x| x);
@@ -238,7 +311,6 @@ mod tests {
         }
         pub fn delete(&mut self, k: u32) {
             println!("Delete {:?}", k);
-
             let res = self.rbt.delete(k);
             println!("res = {:?}", res);
             let mut v = self.vec.last().unwrap().clone();
