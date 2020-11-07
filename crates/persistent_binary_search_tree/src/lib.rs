@@ -1,5 +1,7 @@
+mod color;
 mod paren;
 
+use color::Color;
 use dbg::{lg, msg};
 use std::{cmp::Ordering, fmt::Debug, rc::Rc};
 
@@ -47,6 +49,7 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
         Self::from_node(Node {
             child: [Self(None), Self(None)],
             kv: Rc::new((k, v)),
+            color: Color::Red,
         })
     }
     fn from_links(kv: Rc<(K, V)>, i: usize, l: RcNode<K, V>, r: RcNode<K, V>) -> Self {
@@ -57,6 +60,7 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
                 _ => panic!(),
             },
             kv,
+            color: Color::Red,
         })
     }
     fn insert(&self, k: K, v: V) -> RcNode<K, V> {
@@ -124,6 +128,7 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
 struct Node<K, V> {
     child: [RcNode<K, V>; 2],
     kv: Rc<(K, V)>,
+    color: Color,
 }
 
 #[cfg(test)]

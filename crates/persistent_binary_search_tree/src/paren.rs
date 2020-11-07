@@ -8,7 +8,7 @@ impl<K: Ord + Debug, V: Debug> Paren for Node<K, V> {
     fn paren(&self, w: &mut fmt::Formatter) -> fmt::Result {
         write!(w, "(")?;
         self.child[0].paren(w)?;
-        write!(w, "{:?}", &self.kv.0)?;
+        write!(w, "{:?}", self.color.paint(&self.kv.0))?;
         self.child[1].paren(w)?;
         write!(w, ")")
     }
