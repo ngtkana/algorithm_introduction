@@ -3,7 +3,6 @@ mod paren;
 pub mod validate;
 
 use color::Color;
-use dbg::{lg, msg};
 use std::{cmp::Ordering, fmt::Debug, rc::Rc};
 
 pub struct PersistentRBTree<K, V>(Vec<RcNode<K, V>>);
@@ -12,14 +11,19 @@ impl<K: Ord + Debug, V: Debug> PersistentRBTree<K, V> {
         Self(vec![RcNode(None)])
     }
     pub fn insert(&mut self, k: K, v: V) {
-        let (root, e) = self.0.last().unwrap().insert(k, v, true);
+        let (root, _e) = self.0.last().unwrap().insert(k, v, true);
         let root = root.clone_node().with_color(Color::Black).finish();
         self.0.push(root);
     }
     pub fn delete(&mut self, k: K) -> Option<Rc<(K, V)>> {
-        if let Some((root, rem)) = self.0.last().unwrap().delete(k) {
+        if let Some((root, rem, _e)) = self.0.last().unwrap().delete(k) {
+            let root = RcNode(
+                root.0
+                    .as_ref()
+                    .map(|root| Rc::new(Node::clone(root).with_color(Color::Black))),
+            );
             self.0.push(root);
-            Some(rem)
+            Some(Rc::clone(&rem.unwrap().kv))
         } else {
             let root = RcNode::clone(&self.0.last().unwrap());
             self.0.push(root);
@@ -72,6 +76,16 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
     fn clone_child_node(&self, i: usize) -> Node<K, V> {
         self.child(i).clone_node()
     }
+    fn assert_isolated(self) -> Self {
+        assert!(self.unwrap().child.iter().all(|child| child.0.is_none()));
+        self
+    }
+    fn make_isolated(&self) -> Self {
+        self.clone_node()
+            .with_child(0, Self(None))
+            .with_child(1, Self(None))
+            .finish()
+    }
 
     // -- color
     fn color(&self) -> Color {
@@ -94,17 +108,30 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
 
     // -- deformation
     fn rotate(&self, i: usize) -> Self {
-        let mid = self.child(i).clone_child(1 - i);
-        let orig_root = self.clone_node().with_child(i, mid).finish();
-        self.child(i)
+        let y = self.child(i).clone_child(1 - i);
+        let x = self.clone_node().with_child(i, y).finish();
+        self.child(i).clone_node().with_child(1 - i, x).finish()
+    }
+    fn swap_color_rotate(&self, i: usize) -> Self {
+        let x_color = self.color();
+        let y_color = self.child(i).color();
+        let z = self.child(i).clone_child(1 - i);
+        let x = self
             .clone_node()
-            .with_child(1 - i, orig_root)
-            .finish()
+            .with_child(i, z)
+            .with_color(y_color)
+            .finish();
+        let y = self
+            .clone_child_node(i)
+            .with_child(1 - i, x)
+            .with_color(x_color)
+            .finish();
+        y
     }
 
     // -- rb ops
     fn insert(&self, k: K, v: V, is_root: bool) -> (RcNode<K, V>, Option<DoubleRed>) {
-        let res = match self.0.as_ref() {
+        match self.0.as_ref() {
             None => (
                 Self::new_node(k, v, if is_root { Color::Black } else { Color::Red }),
                 Some(DoubleRed::Me),
@@ -126,8 +153,7 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
                 });
                 (root, e)
             }
-        };
-        res
+        }
     }
     fn insert_fixup(&self, i: usize, j: usize, is_root: bool) -> (Self, Option<DoubleRed>) {
         self.assert_black()
@@ -149,13 +175,7 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
             }
             Color::Black => {
                 if i == j {
-                    let y = self.clone_child_node(i).with_color(Color::Black).finish();
-                    let x = self
-                        .clone_node()
-                        .with_color(Color::Red)
-                        .with_child(i, y)
-                        .finish();
-                    let root = x.rotate(i);
+                    let root = self.swap_color_rotate(i);
                     (root, None)
                 } else {
                     let y = self.child(i).rotate(j);
@@ -167,11 +187,119 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
             }
         }
     }
-    fn delete(&self, k: K) -> Option<(RcNode<K, V>, Rc<(K, V)>)> {
-        todo!()
+    fn delete(&self, k: K) -> Option<(RcNode<K, V>, RcNode<K, V>, Option<Charge>)> {
+        let me = self.0.as_ref()?;
+        let cmp = k.cmp(&me.kv.0);
+        let i = match cmp {
+            Ordering::Equal => {
+                let res = if let Some((child, rem, e)) = me.child[1].delete_first() {
+                    let (root, e) = rem
+                        .assert_isolated()
+                        .clone_node()
+                        .with_child(0, self.clone_child(0))
+                        .with_child(1, child)
+                        .with_color(self.color())
+                        .finish()
+                        .delete_and_then(1, e);
+                    (root, self.make_isolated(), e)
+                } else {
+                    let charge = match me.color {
+                        Color::Red => None,
+                        Color::Black => Some(Charge()),
+                    };
+                    (self.clone_child(0), self.make_isolated(), charge)
+                };
+                return Some(res);
+            }
+            Ordering::Less => 0,
+            Ordering::Greater => 1,
+        };
+        me.child[i].delete(k).map(|(child, rem, e)| {
+            let (root, e) = self
+                .clone_node()
+                .with_child(i, child)
+                .finish()
+                .delete_and_then(i, e);
+            (root, rem, e)
+        })
     }
-    fn delete_first(&self) -> Option<(RcNode<K, V>, Rc<(K, V)>)> {
-        todo!()
+    fn delete_first(&self) -> Option<(RcNode<K, V>, RcNode<K, V>, Option<Charge>)> {
+        let me = self.0.as_ref()?;
+        Some(match me.child[0].delete_first() {
+            None => {
+                let e = match me.color {
+                    Color::Red => None,
+                    Color::Black => Some(Charge()),
+                };
+                let root = me.child[1].clone();
+                (root, self.make_isolated(), e)
+            }
+            Some((root, rem, e)) => {
+                let (root, e) = self
+                    .clone_node()
+                    .with_child(0, root)
+                    .finish()
+                    .delete_and_then(0, e);
+                (root, rem.assert_isolated(), e)
+            }
+        })
+    }
+    fn delete_and_then(self, i: usize, e: Option<Charge>) -> (Self, Option<Charge>) {
+        match e {
+            Some(Charge()) => self.delete_fixup(i),
+            None => (self, None),
+        }
+    }
+    fn delete_fixup(&self, i: usize) -> (Self, Option<Charge>) {
+        match self.child(i).color() {
+            Color::Red => {
+                let y = self.clone_child_node(i).with_color(Color::Black).finish();
+                (self.clone_node().with_child(i, y).finish(), None)
+            }
+            Color::Black => match self.child(1 - i).color() {
+                Color::Red => {
+                    let x = self.swap_color_rotate(1 - i);
+                    let (y, e) = x.child(i).delete_fixup(i);
+                    x.clone_node()
+                        .with_child(i, y)
+                        .finish()
+                        .delete_and_then(i, e)
+                }
+                Color::Black => match (
+                    self.child(1 - i).child(i).color(),
+                    self.child(1 - i).child(1 - i).color(),
+                ) {
+                    (Color::Black, Color::Black) => {
+                        let w = self.clone_child_node(1 - i).with_color(Color::Red).finish();
+                        let x = self.clone_node().with_child(1 - i, w).finish();
+                        (x, Some(Charge()))
+                    }
+                    (Color::Red, Color::Black) => {
+                        let w = self.child(1 - i).swap_color_rotate(i);
+                        let x = self.clone_node().with_child(1 - i, w).finish();
+                        x.delete_fixup(i)
+                    }
+                    (_, Color::Red) => {
+                        let w1 = self
+                            .child(1 - i)
+                            .clone_child_node(1 - i)
+                            .with_color(Color::Black)
+                            .finish();
+                        let w = self
+                            .child(1 - i)
+                            .clone_node()
+                            .with_child(1 - i, w1)
+                            .finish();
+                        let x = self
+                            .clone_node()
+                            .with_child(1 - i, w)
+                            .finish()
+                            .swap_color_rotate(1 - i);
+                        (x, None)
+                    }
+                },
+            },
+        }
     }
     fn collect_vec(&self, vec: &mut Vec<(K, V)>)
     where
@@ -219,6 +347,8 @@ enum DoubleRed {
     Me,
     Child(usize),
 }
+#[derive(Debug, Clone, PartialEq, Copy, Eq)]
+struct Charge();
 
 #[cfg(test)]
 mod tests {
@@ -227,14 +357,14 @@ mod tests {
 
     #[test]
     fn test_rand_small() {
-        test_rand(100, 40, 42);
-        test_rand(100, 40, 43);
+        test_rand(400, 40, 42);
+        test_rand(400, 40, 43);
     }
 
     #[test]
     fn test_rand_large() {
-        test_rand(10, 200, 42);
-        test_rand(10, 400, 43);
+        test_rand(4, 400, 42);
+        test_rand(4, 400, 43);
     }
 
     #[test]
@@ -259,9 +389,9 @@ mod tests {
         for _ in 0..t {
             let mut test = Test::new();
             for _ in 0..q {
-                match rng.gen_range(0, 2) {
+                match rng.gen_range(0, 4) {
                     0 => test.insert(rng.gen_range(0, 10)),
-                    1 => test.insert(rng.gen_range(0, 10)),
+                    1 | 2 | 3 => test.delete(rng.gen_range(0, 10)),
                     _ => unreachable!(),
                 }
             }
