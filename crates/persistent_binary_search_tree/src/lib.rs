@@ -1,12 +1,13 @@
 mod color;
 mod paren;
+pub mod validate;
 
 use color::Color;
 use dbg::{lg, msg};
 use std::{cmp::Ordering, fmt::Debug, rc::Rc};
 
-pub struct PBST<K, V>(Vec<RcNode<K, V>>);
-impl<K: Ord + Debug, V: Debug> PBST<K, V> {
+pub struct PersistentRBTree<K, V>(Vec<RcNode<K, V>>);
+impl<K: Ord + Debug, V: Debug> PersistentRBTree<K, V> {
     pub fn new() -> Self {
         Self(vec![RcNode(None)])
     }
@@ -42,6 +43,7 @@ impl<K: Ord + Debug, V: Debug> Clone for RcNode<K, V> {
     }
 }
 impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
+    // -- ctors
     fn from_node(node: Node<K, V>) -> Self {
         Self(Some(Rc::new(node)))
     }
@@ -63,6 +65,19 @@ impl<K: Ord + Debug, V: Debug> RcNode<K, V> {
             color: Color::Red,
         })
     }
+
+    // -- color
+    fn color(&self) -> Color {
+        self.0.as_ref().map_or(Color::Black, |x| x.color)
+    }
+    fn is_red(&self) -> bool {
+        self.color() == Color::Red
+    }
+    fn is_black(&self) -> bool {
+        self.color() == Color::Black
+    }
+
+    // -- rb ops
     fn insert(&self, k: K, v: V) -> RcNode<K, V> {
         match self.0.as_ref() {
             None => Self::from_kv(k, v),
@@ -133,7 +148,7 @@ struct Node<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use super::PBST;
+    use super::{validate, PersistentRBTree};
     use rand::prelude::*;
 
     #[test]
@@ -181,14 +196,14 @@ mod tests {
 
     struct Test {
         time: u32,
-        pbst: PBST<u32, ()>,
+        rbt: PersistentRBTree<u32, ()>,
         vec: Vec<Vec<u32>>,
     }
     impl Test {
         fn new() -> Self {
             Self {
                 time: 0,
-                pbst: PBST::new(),
+                rbt: PersistentRBTree::new(),
                 vec: vec![Vec::new()],
             }
         }
@@ -196,11 +211,12 @@ mod tests {
             self.time += 1;
             println!(
                 "rbst[{}] = {:?}",
-                self.time, &self.pbst.0[self.time as usize],
+                self.time, &self.rbt.0[self.time as usize],
             );
+            validate::all(&self.rbt);
             for i in 0..=self.time as usize {
                 let result = self
-                    .pbst
+                    .rbt
                     .collect_vec(i)
                     .iter()
                     .map(|&(k, ())| k)
@@ -212,7 +228,7 @@ mod tests {
         fn insert(&mut self, k: u32) {
             println!("Insert {:?}", k);
 
-            self.pbst.insert(k, ());
+            self.rbt.insert(k, ());
             let mut v = self.vec.last().unwrap().clone();
             let lb = v.binary_search(&k).map_or_else(|e| e, |x| x);
             v.insert(lb, k);
@@ -223,7 +239,7 @@ mod tests {
         pub fn delete(&mut self, k: u32) {
             println!("Delete {:?}", k);
 
-            let res = self.pbst.delete(k);
+            let res = self.rbt.delete(k);
             println!("res = {:?}", res);
             let mut v = self.vec.last().unwrap().clone();
             let lb = v.binary_search(&k).map_or_else(|e| e, |x| x);

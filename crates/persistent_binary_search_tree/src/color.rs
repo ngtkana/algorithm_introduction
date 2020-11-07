@@ -1,5 +1,6 @@
 use yansi::Paint;
 
+#[derive(Debug, Clone, PartialEq, Copy, Eq)]
 pub enum Color {
     Red,
     Black,

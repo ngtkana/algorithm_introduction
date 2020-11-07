@@ -1,4 +1,4 @@
-use super::{Node, RcNode, PBST};
+use super::{Node, PersistentRBTree, RcNode};
 use std::fmt::{self, Debug};
 
 pub trait Paren {
@@ -39,7 +39,7 @@ impl<K: Ord + Debug, V: Debug> Debug for RcNode<K, V> {
         w.debug_tuple("RcNode").field(&ParenWrapper(self)).finish()
     }
 }
-impl<K: Ord + Debug, V: Debug> Debug for PBST<K, V> {
+impl<K: Ord + Debug, V: Debug> Debug for PersistentRBTree<K, V> {
     fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
         w.debug_list()
             .entries(self.0.iter().map(|x| ParenWrapper(x)))
