@@ -1,5 +1,5 @@
 [package]
-name = "persistent_binary_search_tree"
+name = "persistent_rbtree"
 version = "0.1.0"
 authors = ["ngtkana <ngtkana@gmail.com>"]
 edition = "2018"
