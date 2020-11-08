@@ -3,7 +3,6 @@ mod paren;
 pub mod validate;
 
 use color::Color;
-use dbg::{lg, msg};
 use std::{cmp::Ordering, fmt::Debug};
 
 pub struct RBTree<K, V>(BoxedNode<K, V>);
@@ -17,6 +16,9 @@ impl<K: Ord + Debug, V: Debug> RBTree<K, V> {
     }
     pub fn delete(&mut self, k: K) {
         self.0.delete(k);
+        if let Some(me) = self.0.0.as_mut() {
+            me.color = Color::Black;
+        }
     }
     pub fn collect_vec(&self) -> Vec<(K, V)>
     where
@@ -142,7 +144,6 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         }
     }
     fn insert_fixup(&mut self, i: usize, j: usize) -> Option<DoubleRed> {
-        msg!("insert_fixup", (&self, i, j));
         self.assert_black()
             .child(i)
             .assert_red()
@@ -165,39 +166,88 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
             }
         }
     }
-    fn delete(&mut self, k: K) -> Option<BoxedNode<K, V>> {
+    fn delete(&mut self, k: K) -> Option<(BoxedNode<K, V>, Option<Charge>)> {
         let me = self.0.as_mut()?;
         let i = match k.cmp(&me.key) {
             Ordering::Equal => {
-                return Some(
-                    if let Some(mut rem) = me.child[1].delete_first() {
-                        (0..2).for_each(|i| rem.replace_empty_child(i, self.take_child(i)));
-                        self.replace(rem)
-                    } else {
-                        assert!(self.child(1).is_nil());
-                        let child = self.take_child(0);
-                        self.replace(child)
-                    }
-                    .assert_isolated(),
-                );
+                return Some(if let Some((mut rem, e)) = me.child[1].delete_first() {
+                    (0..2).for_each(|i| rem.replace_empty_child(i, self.take_child(i)));
+                    self.swap_color(&mut rem);
+                    let e = rem.delete_and_then(1, e);
+                    (self.replace(rem), e)
+                } else {
+                    assert!(self.child(1).is_nil());
+                    let child = self.take_child(0);
+                    let rem = self.replace(child);
+                    let e = match rem.color() {
+                        Color::Red => None,
+                        Color::Black => Some(Charge()),
+                    };
+                    (rem, e)
+                });
             }
             Ordering::Less => 0,
             Ordering::Greater => 1,
         };
-        me.child[i].delete(k)
+        let (rem, e) = me.child[i].delete(k)?;
+        let e = self.delete_and_then(i, e);
+        Some((rem, e))
     }
-    fn delete_first(&mut self) -> Option<BoxedNode<K, V>> {
+    fn delete_first(&mut self) -> Option<(BoxedNode<K, V>, Option<Charge>)> {
         let me = self.0.as_mut()?;
-        Some(
-            if let Some(rem) = me.child[0].delete_first() {
-                rem
-            } else {
-                assert!(self.child(0).is_nil());
-                let child = self.take_child(1);
-                self.replace(child)
+        Some(if let Some((rem, e)) = me.child[0].delete_first() {
+            let e = self.delete_and_then(0, e);
+            (rem, e)
+        } else {
+            assert!(self.child(0).is_nil());
+            let child = self.take_child(1);
+            let rem = self.replace(child).assert_isolated();
+            let charge = match rem.color() {
+                Color::Red => None,
+                Color::Black => Some(Charge()),
+            };
+            (rem, charge)
+        })
+    }
+    fn delete_and_then(&mut self, i: usize, e: Option<Charge>) -> Option<Charge> {
+        e.and_then(|Charge()| self.delete_fixup(i))
+    }
+    fn delete_fixup(&mut self, i: usize) -> Option<Charge> {
+        match self.child(i).color() {
+            Color::Red => {
+                self.child_mut(i).set_color(Color::Black);
+                None
             }
-            .assert_isolated(),
-        )
+            Color::Black => match self.child(1 - i).color() {
+                Color::Red => {
+                    self.assert_black().child(1 - i).child(0).assert_black();
+                    self.assert_black().child(1 - i).child(1).assert_black();
+                    self.swap_color_rotate(1-i);
+                    let e = self.child_mut(i).delete_fixup(i);
+                    self.delete_and_then(i, e)
+                }
+                Color::Black => match (
+                    self.child(1 - i).child(i).color(),
+                    self.child(1 - i).child(1 - i).color(),
+                ) {
+                    (Color::Black, Color::Black) => {
+                        self.child_mut(1 - i).set_color(Color::Red);
+                        Some(Charge())
+                    }
+                    (Color::Red, Color::Black) => {
+                        self.child_mut(1 - i).swap_color_rotate(i);
+                        self.delete_fixup(i)
+                    }
+                    (_, Color::Red) => {
+                        self.child_mut(1 - i)
+                            .child_mut(1 - i)
+                            .set_color(Color::Black);
+                        self.swap_color_rotate(1 - i);
+                        None
+                    }
+                },
+            },
+        }
     }
     fn collect_vec(&self, vec: &mut Vec<(K, V)>)
     where
@@ -224,6 +274,8 @@ enum DoubleRed {
     Child(usize),
 }
 
+struct Charge();
+
 #[cfg(test)]
 mod tests {
     use super::{validate, RBTree};
@@ -234,6 +286,13 @@ mod tests {
         test_rand(100, 20, 42);
         test_rand(100, 20, 43);
         test_rand(100, 20, 91);
+    }
+
+    #[test]
+    fn test_rand_large() {
+        test_rand(10, 200, 42);
+        test_rand(10, 200, 43);
+        test_rand(10, 200, 91);
     }
 
     #[test]
@@ -258,9 +317,9 @@ mod tests {
         for _ in 0..t {
             let mut test = Test::new();
             for _ in 0..q {
-                match rng.gen_range(0, 1) {
+                match rng.gen_range(0, 3) {
                     0 => test.insert(rng.gen_range(0, 10)),
-                    // 1 => test.delete(rng.gen_range(0, 10)),
+                    1 | 2 => test.delete(rng.gen_range(0, 10)),
                     _ => unreachable!(),
                 }
             }
