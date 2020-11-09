@@ -52,6 +52,7 @@ impl<K: Ord + Debug, V: Debug> Validate for Node<K, V> {
             Color::Red => x,
             Color::Black => x + 1,
         };
+        assert_eq!(res, self.bh, "Recorded black height is wrong: {:?}", &self);
         res
     }
 }

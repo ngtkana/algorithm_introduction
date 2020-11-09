@@ -4,6 +4,7 @@ pub mod validate;
 
 use color::Color;
 use std::{cmp::Ordering, fmt::Debug};
+use dbg::{msg, lg};
 
 pub struct RBTree<K, V>(BoxedNode<K, V>);
 impl<K: Ord + Debug, V: Debug> RBTree<K, V> {
@@ -13,11 +14,13 @@ impl<K: Ord + Debug, V: Debug> RBTree<K, V> {
     pub fn insert(&mut self, k: K, v: V) {
         self.0.insert(k, v);
         self.0.set_color(Color::Black);
+        self.0.update();
     }
     pub fn delete(&mut self, k: K) {
         self.0.delete(k);
         if let Some(me) = self.0.0.as_mut() {
             me.color = Color::Black;
+            self.0.update();
         }
     }
     pub fn collect_vec(&self) -> Vec<(K, V)>
@@ -39,6 +42,7 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
             key: k,
             value: v,
             color: Color::Red,
+            bh: 0,
         })))
     }
     fn is_nil(&self) -> bool {
@@ -51,6 +55,7 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
     fn take(&mut self) -> Self {
         self.replace(Self(None))
     }
+    fn finish(&mut self) {}
 
     // unwrap
     fn unwrap(&self) -> &Node<K, V> {
@@ -70,16 +75,18 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         assert!(self.child(1).is_nil());
         self
     }
-    fn replace_empty_child(&mut self, i: usize, x: Self) {
+    fn replace_empty_child(&mut self, i: usize, x: Self) -> &mut Self {
         assert!(self.child(i).is_nil());
         let old = self.child_mut(i).replace(x);
         assert!(old.is_nil());
+        self
     }
     fn take_child(&mut self, i: usize) -> Self {
         self.child_mut(i).replace(Self(None))
     }
-    fn set_color(&mut self, color: Color) {
+    fn set_color(&mut self, color: Color) -> &mut Self {
         self.unwrap_mut().color = color;
+        self
     }
     fn swap_color(&mut self, y: &mut Self) {
         let x = self.unwrap_mut();
@@ -90,18 +97,32 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         let color = self.color();
         let color = std::mem::replace(&mut self.child_mut(i).unwrap_mut().color, color);
         self.unwrap_mut().color = color;
+        // no update
     }
     fn rotate(&mut self, i: usize) {
         let mut x = self.take();
         let mut y = x.take_child(i);
         let z = y.take_child(1 - i);
-        x.replace_empty_child(i, z);
-        y.replace_empty_child(1 - i, x);
+        x.replace_empty_child(i, z).update();
+        y.replace_empty_child(1 - i, x).update();
         *self = y
     }
     fn swap_color_rotate(&mut self, i: usize) {
         self.swap_color_with_child(i);
         self.rotate(i);
+    }
+    fn update(&mut self) {
+        msg!("update", &self);
+        if self.0.is_some() {
+            let x = self.unwrap().child[0].bh();
+            let y = self.unwrap().child[1].bh();
+            assert_eq!(x, y, "Inconsistent black height: {:?}", &self);
+            let bh = match self.color() {
+                Color::Red => x,
+                Color::Black => x + 1,
+            };
+            self.unwrap_mut().bh = bh;
+        }
     }
 
     // color
@@ -121,6 +142,9 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
     fn assert_black(&self) -> &Self {
         assert!(self.is_black());
         self
+    }
+    fn bh(&self) -> u32 {
+        self.0.as_ref().map_or(0, |me| me.bh)
     }
 
     // rb ops
@@ -144,6 +168,7 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         }
     }
     fn insert_fixup(&mut self, i: usize, j: usize) -> Option<DoubleRed> {
+        msg!("insert_fixup", (&self, i, j));
         self.assert_black()
             .child(i)
             .assert_red()
@@ -151,7 +176,10 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
             .assert_red();
         match self.child(1 - i).color() {
             Color::Red => {
-                (0..2).for_each(|i| self.child_mut(i).set_color(Color::Black));
+                (0..2).for_each(|i| {
+                    self.child_mut(i).set_color(Color::Black).update();
+                    self.child_mut(i).update();
+                });
                 self.set_color(Color::Red);
                 Some(DoubleRed::Me)
             }
@@ -167,12 +195,14 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         }
     }
     fn delete(&mut self, k: K) -> Option<(BoxedNode<K, V>, Option<Charge>)> {
+        msg!("delete", &self);
         let me = self.0.as_mut()?;
         let i = match k.cmp(&me.key) {
             Ordering::Equal => {
                 return Some(if let Some((mut rem, e)) = me.child[1].delete_first() {
-                    (0..2).for_each(|i| rem.replace_empty_child(i, self.take_child(i)));
                     self.swap_color(&mut rem);
+                    rem.update();
+                    (0..2).for_each(|i| rem.replace_empty_child(i, self.take_child(i)).finish());
                     let e = rem.delete_and_then(1, e);
                     (self.replace(rem), e)
                 } else {
@@ -191,11 +221,13 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
         };
         let (rem, e) = me.child[i].delete(k)?;
         let e = self.delete_and_then(i, e);
+        self.update();
         Some((rem, e))
     }
     fn delete_first(&mut self) -> Option<(BoxedNode<K, V>, Option<Charge>)> {
+        msg!("delete_first", &self);
         let me = self.0.as_mut()?;
-        Some(if let Some((rem, e)) = me.child[0].delete_first() {
+        let ret = if let Some((rem, e)) = me.child[0].delete_first() {
             let e = self.delete_and_then(0, e);
             (rem, e)
         } else {
@@ -207,22 +239,27 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
                 Color::Black => Some(Charge()),
             };
             (rem, charge)
-        })
+        };
+        self.update();
+        Some(ret)
     }
     fn delete_and_then(&mut self, i: usize, e: Option<Charge>) -> Option<Charge> {
         e.and_then(|Charge()| self.delete_fixup(i))
     }
     fn delete_fixup(&mut self, i: usize) -> Option<Charge> {
+        msg!("delete_fixup", (&self, i));
         match self.child(i).color() {
             Color::Red => {
-                self.child_mut(i).set_color(Color::Black);
+                lg!("foo");
+                self.child_mut(i).set_color(Color::Black).update();
                 None
             }
             Color::Black => match self.child(1 - i).color() {
                 Color::Red => {
+                lg!("foo");
                     self.assert_black().child(1 - i).child(0).assert_black();
                     self.assert_black().child(1 - i).child(1).assert_black();
-                    self.swap_color_rotate(1-i);
+                    self.swap_color_rotate(1 - i);
                     let e = self.child_mut(i).delete_fixup(i);
                     self.delete_and_then(i, e)
                 }
@@ -231,17 +268,22 @@ impl<K: Ord + Debug, V: Debug> BoxedNode<K, V> {
                     self.child(1 - i).child(1 - i).color(),
                 ) {
                     (Color::Black, Color::Black) => {
+                lg!("foo");
                         self.child_mut(1 - i).set_color(Color::Red);
+                        self.child_mut(1 - i).update();
                         Some(Charge())
                     }
                     (Color::Red, Color::Black) => {
+                lg!("foo");
                         self.child_mut(1 - i).swap_color_rotate(i);
                         self.delete_fixup(i)
                     }
                     (_, Color::Red) => {
+                lg!("foo");
                         self.child_mut(1 - i)
                             .child_mut(1 - i)
-                            .set_color(Color::Black);
+                            .set_color(Color::Black)
+                            .update();
                         self.swap_color_rotate(1 - i);
                         None
                     }
@@ -267,6 +309,7 @@ struct Node<K, V> {
     key: K,
     value: V,
     color: Color,
+    bh: u32,
 }
 
 enum DoubleRed {
