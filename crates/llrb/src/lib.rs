@@ -3,11 +3,7 @@ mod validate;
 
 pub use validate::Validate;
 use {
-    std::{
-        cmp::Ordering,
-        fmt::Debug,
-        mem::{replace, swap},
-    },
+    std::{cmp::Ordering, fmt::Debug, mem::replace},
     yansi::Paint,
 };
 
@@ -58,100 +54,70 @@ impl<K: Ord + Debug, V: Debug> BoxNode<K, V> {
         } else {
             self.child_mut(if key <= self.unwrap().key { 0 } else { 1 })
                 .insert(key, value);
-            // Balance right leaning
-            if self.child(0).is_black() && self.child(1).is_red() {
-                self.rotate(1)
-            }
-            // Balance left double red
-            if self.child(0).is_red() && self.child(0).child(0).is_red() {
-                self.rotate(0)
-            }
-            // Split 4-node
-            if self.child(0).is_red() && self.child(1).is_red() {
-                self.split_node()
-            }
+            self.fixup();
         }
     }
     fn delete(&mut self, key: &K) -> Option<Self> {
         if self.is_nil() {
             None
         } else {
-            let i = match key.cmp(&self.unwrap().key) {
-                Ordering::Less => 0,
-                Ordering::Greater => 1,
-                Ordering::Equal => match self.color() {
-                    Color::Black => 1,
-                    Color::Red => {
-                        // force the next node is not 2-node
-                        if self.child(1).is_two() {
-                            self.move_right();
-                        }
-                        if key == &self.unwrap().key {
-                            let res = if let Some(mut rem) = self.child_mut(1).delete_first() {
-                                // swap the contents
-                                swap(&mut rem.unwrap_mut().key, &mut self.unwrap_mut().key);
-                                swap(&mut rem.unwrap_mut().value, &mut self.unwrap_mut().value);
-                                rem
-                            } else {
-                                replace(self, Self::nil())
-                            };
-                            self.delete_fixup();
-                            return Some(res);
-                        } else {
-                            1
-                        }
-                    }
-                },
+            let cmp = key.cmp(&self.unwrap().key);
+            let rem = if cmp == Ordering::Less {
+                // Merge 2-nodes
+                if self.child(0).is_two() {
+                    self.move_left();
+                }
+                self.child_mut(0).delete(key)
+            } else {
+                // Lean right
+                if self.child(0).is_red() {
+                    self.rotate(0);
+                }
+                if cmp == Ordering::Equal && self.child(1).is_nil() {
+                    return Some(replace(self, Self::nil()));
+                }
+                // Merge 2-nodes
+                if self.child(1).is_two() {
+                    self.move_right();
+                }
+                if key == &self.unwrap().key {
+                    let mut rem = self.child_mut(1).delete_first();
+                    (0..2).for_each(|i| rem.init_child(i, self.take_child(i)));
+                    rem.set_color(self.color());
+                    Some(replace(self, rem))
+                } else {
+                    self.child_mut(1).delete(key)
+                }
             };
-            match self.color() {
-                Color::Black => {
-                    // right lean if necessry
-                    if i == 1 && self.is_three() {
-                        self.rotate(0);
-                    }
-                }
-                Color::Red => {
-                    // force the next node is not 2-node
-                    if self.child(i).is_two() {
-                        match i {
-                            0 => self.move_left(),
-                            1 => self.move_right(),
-                            _ => unreachable!(),
-                        }
-                    }
-                }
-            }
-            let rem = self.child_mut(i).delete(key);
-            self.delete_fixup();
+            self.fixup();
             rem
         }
     }
-    fn delete_first(&mut self) -> Option<Self> {
-        if self.is_nil() {
-            None
-        } else if self.child(0).is_nil() {
-            assert!(self.child(1).is_nil());
-            Some(replace(self, Self::nil()))
+    fn delete_first(&mut self) -> Self {
+        if self.child(0).is_nil() {
+            replace(self, Self::nil())
         } else {
-            // Force the next node is not 2-node
-            if self.child(0).is_black() && self.child(0).child(0).is_black() {
+            // Merge 2-nodes
+            if self.child(0).is_two() {
                 self.move_left();
             }
             let rem = self.child_mut(0).delete_first();
-            self.delete_fixup();
+            self.fixup();
             rem
         }
     }
-    fn delete_fixup(&mut self) {
-        if !self.is_nil() {
-            // Balance right leaning
-            if self.child(0).is_black() && self.child(1).is_red() {
-                self.rotate(1);
-            }
-            // Split 4-node
-            if self.child(0).is_red() && self.child(1).is_red() {
-                self.split_node();
-            }
+    fn fixup(&mut self) {
+        // Balance right-leaning red
+        if self.child(0).is_black() && self.child(1).is_red() {
+            self.rotate(1);
+        }
+        // Balance double red
+        if self.child(0).is_red() && self.child(0).child(0).is_red() {
+            self.rotate(0);
+        }
+        // Split 4-nodes
+        if self.child(0).is_red() && self.child(1).is_red() {
+            self.split_node();
         }
     }
 
@@ -188,6 +154,9 @@ impl<K: Ord + Debug, V: Debug> BoxNode<K, V> {
     fn set_color(&mut self, color: Color) {
         self.unwrap_mut().color = color
     }
+    fn is_two(&self) -> bool {
+        !self.is_nil() && self.is_black() && self.child(0).is_black() && self.child(1).is_black()
+    }
 
     // -- child
     fn child(&self, i: usize) -> &Self {
@@ -202,14 +171,6 @@ impl<K: Ord + Debug, V: Debug> BoxNode<K, V> {
     fn init_child(&mut self, i: usize, x: Self) {
         let old = replace(&mut self.unwrap_mut().child[i], x);
         assert!(old.is_nil());
-    }
-
-    // -- kind
-    fn is_two(&self) -> bool {
-        !self.is_nil() && self.is_black() && self.child(0).is_black() && self.child(1).is_black()
-    }
-    fn is_three(&self) -> bool {
-        !self.is_nil() && self.is_black() && self.child(0).is_red() && self.child(1).is_black()
     }
 
     // -- rotate
@@ -384,7 +345,7 @@ mod tests {
         fn delete(&mut self, x: u32) {
             println!("Delete {:?}", &x);
             self.llrb.delete(&x);
-            println!("alv = {:?}", &self.llrb);
+            println!("llrb = {:?}", &self.llrb);
             if let Ok(i) = self.vec.binary_search(&x) {
                 self.vec.remove(i);
             }
