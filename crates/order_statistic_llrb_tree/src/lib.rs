@@ -19,6 +19,7 @@ impl<K: Ord + Debug, V: Debug> LLRB<K, V> {
     pub fn get(&self, i: usize) -> Option<&Node<K, V>> {
         self.0.get(i)
     }
+    // NOTE: 重複なしです。
     pub fn insert(&mut self, key: K, value: V) {
         self.0.insert(key, value);
         self.0.set_color(Color::Black);
@@ -77,8 +78,12 @@ impl<K: Ord + Debug, V: Debug> BoxNode<K, V> {
         if self.is_nil() {
             *self = Node::new(key, value, Color::Red).boxed();
         } else {
-            self.child_mut(if key <= self.unwrap().key { 0 } else { 1 })
-                .insert(key, value);
+            self.child_mut(match key.cmp(&self.unwrap().key) {
+                Ordering::Less => 0,
+                Ordering::Greater => 1,
+                Ordering::Equal => return,
+            })
+            .insert(key, value);
             self.fixup();
         }
     }
@@ -132,6 +137,7 @@ impl<K: Ord + Debug, V: Debug> BoxNode<K, V> {
         }
     }
     fn fixup(&mut self) {
+        self.update();
         // Balance right-leaning red
         if self.child(0).is_black() && self.child(1).is_red() {
             self.rotate(1);
@@ -144,7 +150,6 @@ impl<K: Ord + Debug, V: Debug> BoxNode<K, V> {
         if self.child(0).is_red() && self.child(1).is_red() {
             self.split_node();
         }
-        self.update();
     }
 
     fn collect_vec(&self, vec: &mut Vec<(K, V)>)
@@ -292,21 +297,21 @@ mod tests {
     #[test]
     fn test_hand_insert() {
         let mut test = Test::new();
-        test.insert(10);
-        test.insert(11);
-        test.insert(18);
-        test.insert(14);
-        test.insert(13);
-        test.insert(18);
+        test.insert(10, 42);
+        test.insert(11, 42);
+        test.insert(18, 42);
+        test.insert(14, 42);
+        test.insert(13, 42);
+        test.insert(18, 42);
     }
 
     #[test]
     fn test_hand_delete() {
         let mut test = Test::new();
-        test.insert(10);
-        test.insert(11);
-        test.insert(15);
-        test.insert(17);
+        test.insert(10, 42);
+        test.insert(11, 42);
+        test.insert(15, 42);
+        test.insert(17, 42);
         test.delete(17);
         test.delete(11);
         test.delete(12);
@@ -315,12 +320,12 @@ mod tests {
     #[test]
     fn test_hand_get() {
         let mut test = Test::new();
-        test.insert(10);
-        test.insert(11);
-        test.insert(18);
-        test.insert(14);
-        test.insert(13);
-        test.insert(18);
+        test.insert(10, 42);
+        test.insert(11, 42);
+        test.insert(18, 42);
+        test.insert(14, 42);
+        test.insert(13, 42);
+        test.insert(18, 42);
         (0..10).for_each(|i| test.get(i));
     }
 
@@ -339,14 +344,14 @@ mod tests {
     #[test]
     fn test_oneline() {
         let mut test = Test::new();
-        (0..100).for_each(|i| test.insert(i));
+        (0..100).for_each(|i| test.insert(i, i));
         (0..100).for_each(|i| test.delete(i));
     }
 
     #[test]
     fn test_oneline_reverse() {
         let mut test = Test::new();
-        (0..100).for_each(|i| test.insert(i));
+        (0..100).for_each(|i| test.insert(i, i));
         (0..100).rev().for_each(|i| test.delete(i));
     }
 
@@ -357,7 +362,7 @@ mod tests {
             for j in 0..q {
                 println!("Test {}, Query {}", i, j);
                 match rng.gen_range(0, 3) {
-                    0 => test.insert(rng.gen_range(0, 30)),
+                    0 => test.insert(rng.gen_range(0, 30), rng.gen_range(0, 100)),
                     1 => test.delete(rng.gen_range(0, 30)),
                     2 => test.get(rng.gen_range(0, test.len() + 1)),
                     _ => panic!(),
@@ -367,8 +372,8 @@ mod tests {
     }
 
     struct Test {
-        llrb: LLRB<u32, ()>,
-        vec: Vec<u32>,
+        llrb: LLRB<u32, u32>,
+        vec: Vec<(u32, u32)>,
     }
     impl Test {
         fn new() -> Self {
@@ -382,25 +387,26 @@ mod tests {
         }
         fn get(&mut self, i: usize) {
             println!("Get {:?}", &i);
-            let result = self.llrb.get(i).map(|node| node.key);
+            let result = self.llrb.get(i).map(|node| (node.key, node.value));
             let expected = self.vec.get(i).copied();
             println!("result = {:?}, expected = {:?}", result, expected);
             assert_eq!(result, expected, "Failed in `get`");
             self.postprocess();
         }
-        fn insert(&mut self, x: u32) {
-            println!("Insert {:?}", &x);
-            self.llrb.insert(x, ());
+        fn insert(&mut self, key: u32, value: u32) {
+            println!("Insert {}, {}", key, value);
+            self.llrb.insert(key, value);
             println!("llrb = {:?}", &self.llrb);
-            let i = self.vec.binary_search(&x).map_or_else(|e| e, |x| x);
-            self.vec.insert(i, x);
+            if let Err(i) = self.vec.binary_search_by_key(&key, |&(key, _)| key) {
+                self.vec.insert(i, (key, value));
+            }
             self.postprocess();
         }
-        fn delete(&mut self, x: u32) {
-            println!("Delete {:?}", &x);
-            self.llrb.delete(&x);
+        fn delete(&mut self, key: u32) {
+            println!("Delete {:?}", &key);
+            self.llrb.delete(&key);
             println!("llrb = {:?}", &self.llrb);
-            if let Ok(i) = self.vec.binary_search(&x) {
+            if let Ok(i) = self.vec.binary_search_by_key(&key, |&(key, _)| key) {
                 self.vec.remove(i);
             }
             self.postprocess();
@@ -408,12 +414,7 @@ mod tests {
         fn postprocess(&self) {
             Validate::validate(&self.llrb);
             assert_eq!(
-                &self
-                    .llrb
-                    .collect_vec()
-                    .iter()
-                    .map(|&(k, ())| k)
-                    .collect::<Vec<_>>(),
+                &self.llrb.collect_vec().iter().copied().collect::<Vec<_>>(),
                 &self.vec
             );
             assert_eq!(self.llrb.len(), self.vec.len());

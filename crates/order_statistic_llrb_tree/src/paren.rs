@@ -19,8 +19,13 @@ impl<K: Ord + Debug, V: Debug> Paren for Node<K, V> {
     fn paren(&self, w: &mut fmt::Formatter) -> fmt::Result {
         write!(w, "(")?;
         self.child[0].paren(w)?;
-        write!(w, "{:?}:{}", self.color.paint(&self.key), self.size)?;
-        self.child[1].paren(w)?;
+        write!(
+            w,
+            "{:?}:{:?}:{}",
+            self.color.paint(&self.key),
+            &self.value,
+            self.size
+        )?;
         write!(w, ")")
     }
 }
