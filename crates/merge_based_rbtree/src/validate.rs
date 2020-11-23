@@ -1,13 +1,6 @@
 use super::{color::Color, BoxNode, Node, RBTree};
 use std::fmt::Debug;
 
-pub fn all<T: Validate>(x: &T) {
-    x.no_double_red();
-    x.correct_black_height();
-    x.correct_size();
-    x.root_is_black();
-}
-
 impl<K: Ord + Debug> Validate for RBTree<K> {
     fn no_double_red(&self) {
         self.0.as_ref().iter().for_each(|root| root.no_double_red());
