@@ -3,24 +3,24 @@ use {
     std::fmt::{self, Debug},
 };
 
-impl<K: Ord + Debug> Debug for BTree<K> {
-    fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
-        w.debug_tuple("BTree").field(&Wrapper(self)).finish()
-    }
-}
-impl<K: Ord + Debug> Debug for Node<K> {
-    fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
-        w.debug_tuple("Node").field(&Wrapper(self)).finish()
-    }
-}
-struct Wrapper<'a, T>(&'a T);
+// impl<K: Ord + Debug> Debug for BTree<K> {
+//     fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
+//         w.debug_tuple("BTree").field(&Wrapper(self)).finish()
+//     }
+// }
+// impl<K: Ord + Debug> Debug for Node<K> {
+//     fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
+//         w.debug_tuple("Node").field(&Wrapper(self)).finish()
+//     }
+// }
+pub struct Wrapper<'a, T>(pub &'a T);
 impl<'a, T: Paren> Debug for Wrapper<'a, T> {
     fn fmt(&self, w: &mut fmt::Formatter) -> fmt::Result {
         self.0.paren(w)
     }
 }
 
-trait Paren {
+pub trait Paren {
     fn paren(&self, w: &mut fmt::Formatter) -> fmt::Result;
 }
 impl<K: Ord + Debug> Paren for BTree<K> {
@@ -31,19 +31,19 @@ impl<K: Ord + Debug> Paren for BTree<K> {
 impl<K: Ord + Debug> Paren for Node<K> {
     fn paren(&self, w: &mut fmt::Formatter) -> fmt::Result {
         write!(w, "[")?;
-        if let Some(child) = &self.child {
-            for i in 0..self.keys.len() {
-                child[i].paren(w)?;
-                write!(w, "{:?}", &self.keys[i])?;
-            }
-            child.last().unwrap().paren(w)?;
-        } else {
+        if self.is_leaf() {
             for i in 0..self.keys.len() {
                 if i != 0 {
                     write!(w, ",")?;
                 }
                 write!(w, "{:?}", &self.keys[i])?;
             }
+        } else {
+            for i in 0..self.keys.len() {
+                self.child[i].paren(w)?;
+                write!(w, "{:?}", &self.keys[i])?;
+            }
+            self.child.back().unwrap().paren(w)?;
         }
         write!(w, "]")
     }
