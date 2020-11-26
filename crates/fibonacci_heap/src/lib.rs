@@ -1,10 +1,9 @@
 use {
     itertools::Itertools,
-    paren::Paren,
     std::{
         cell::{Ref, RefCell},
         convert::identity,
-        fmt::{self, Debug, Formatter},
+        fmt::Debug,
         mem::{replace, swap, take},
         rc::{Rc, Weak},
     },
@@ -161,40 +160,17 @@ impl<K: Ord + Debug> Node<K> {
     }
 }
 
-impl<K: Ord + Debug> Paren for FibonacciHeap<K> {
-    fn paren(&self, w: &mut Formatter) -> fmt::Result {
-        write!(w, "FibonacciHeap [")?;
-        self.chain
-            .iter()
-            .map(|node| format!("{:?}", paren::Wrapper(&*node.borrow())))
-            .intersperse(",".to_owned())
-            .map(|s| write!(w, "{}", s))
-            .collect::<fmt::Result>()?;
-        write!(w, "]")
-    }
-}
-impl<K: Ord + Debug> Paren for Node<K> {
-    fn paren(&self, w: &mut Formatter) -> fmt::Result {
-        write!(w, "(")?;
-        write!(w, "{:?}", &self.key)?;
-        self.child
-            .iter()
-            .map(|node| node.borrow().paren(w))
-            .collect::<fmt::Result>()?;
-        write!(w, ")")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use {
         super::FibonacciHeap,
+        itertools::Itertools,
         paren::Paren,
         std::{
             cell::RefCell,
             cmp::Reverse,
             collections::BinaryHeap,
-            fmt::Debug,
+            fmt::{self, Debug, Formatter},
             rc::{Rc, Weak},
         },
         yansi::Paint,
@@ -348,6 +324,29 @@ mod tests {
                     "Parent of a child is not me."
                 );
             }
+        }
+    }
+    impl<K: Ord + Debug> Paren for FibonacciHeap<K> {
+        fn paren(&self, w: &mut Formatter) -> fmt::Result {
+            write!(w, "FibonacciHeap [")?;
+            self.chain
+                .iter()
+                .map(|node| format!("{:?}", paren::Wrapper(&*node.borrow())))
+                .intersperse(",".to_owned())
+                .map(|s| write!(w, "{}", s))
+                .collect::<fmt::Result>()?;
+            write!(w, "]")
+        }
+    }
+    impl<K: Ord + Debug> Paren for super::Node<K> {
+        fn paren(&self, w: &mut Formatter) -> fmt::Result {
+            write!(w, "(")?;
+            write!(w, "{:?}", &self.key)?;
+            self.child
+                .iter()
+                .map(|node| node.borrow().paren(w))
+                .collect::<fmt::Result>()?;
+            write!(w, ")")
         }
     }
 }
