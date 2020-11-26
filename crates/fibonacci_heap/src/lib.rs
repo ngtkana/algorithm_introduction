@@ -54,6 +54,7 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
         } else {
             self.len -= 1;
             let Node {
+                mark: _mark,
                 key,
                 mut child,
                 parent,
@@ -103,6 +104,7 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
 
 #[derive(Debug)]
 pub struct Node<K> {
+    mark: bool,
     key: K,
     child: Vec<Rc<RefCell<Node<K>>>>,
     parent: Weak<RefCell<Node<K>>>,
@@ -110,6 +112,7 @@ pub struct Node<K> {
 impl<K: Ord + Debug> Node<K> {
     pub fn new(key: K) -> Self {
         Self {
+            mark: false,
             key,
             child: Vec::new(),
             parent: Weak::new(),
