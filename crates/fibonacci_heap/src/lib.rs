@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn test_decreast_key() {
+    fn test_decrease_key() {
         let mut test = Test::new();
         let h0 = test.push(20);
         test.decrease_key(Weak::upgrade(&h0).unwrap(), 18);
