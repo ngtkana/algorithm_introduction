@@ -3,7 +3,6 @@ use {
     paren::Paren,
     std::{
         cell::{Ref, RefCell},
-        convert::identity,
         fmt::{self, Debug, Formatter},
         mem::{swap, take},
         rc::{Rc, Weak},
@@ -11,91 +10,63 @@ use {
 };
 
 #[derive(Debug)]
-pub struct FibonacciHeap<K> {
-    len: usize,
-    chain: Vec<Rc<RefCell<Node<K>>>>,
-}
+pub struct FibonacciHeap<K>(Vec<Rc<RefCell<Node<K>>>>);
 impl<K: Ord + Debug> FibonacciHeap<K> {
     pub fn new() -> Self {
-        Self {
-            len: 0,
-            chain: Vec::new(),
-        }
+        Self(Vec::new())
     }
     pub fn push(&mut self, key: K) {
-        self.chain.push(Rc::new(RefCell::new(Node::new(key))));
-        if self.chain.first().unwrap().borrow().key > self.chain.last().unwrap().borrow().key {
-            let len = self.chain.len();
-            self.chain.swap(0, len - 1);
+        self.0.push(Rc::new(RefCell::new(Node::new(key))));
+        if self.0.first().unwrap().borrow().key > self.0.last().unwrap().borrow().key {
+            let len = self.0.len();
+            self.0.swap(0, len - 1);
         }
-        self.len += 1;
     }
     pub fn append(&mut self, other: &mut Self) {
-        self.len += other.len;
-        if let Some(me) = self.chain.first_mut() {
-            if let Some(other) = other.chain.first_mut() {
+        if let Some(me) = self.0.first_mut() {
+            if let Some(other) = other.0.first_mut() {
                 if me.borrow().key > other.borrow().key {
                     swap(&mut *me, &mut *other);
                 }
             }
         }
-        self.chain.append(&mut other.chain)
+        self.0.append(&mut other.0)
     }
     pub fn peek(&self) -> Option<Ref<K>> {
-        self.chain
+        self.0
             .first()
             .map(|node| Ref::map(node.borrow(), |node| &node.key))
     }
     pub fn pop(&mut self) -> Option<K> {
-        if self.chain.is_empty() {
+        if self.0.is_empty() {
             None
         } else {
-            self.len -= 1;
             let Node {
                 key,
                 mut child,
                 parent,
-            } = Rc::try_unwrap(self.chain.swap_remove(0))
-                .unwrap()
-                .into_inner();
+            } = Rc::try_unwrap(self.0.swap_remove(0)).unwrap().into_inner();
             assert!(parent.upgrade().is_none());
-            self.chain.append(&mut child);
+            self.0.append(&mut child);
             self.consolidate();
-            self.fix_top();
             Some(key)
         }
     }
-    fn consolidate(&mut self) {
-        let n = self.len.next_power_of_two().trailing_zeros() as usize * 2;
-        let mut a = vec![None::<Rc<RefCell<Node<K>>>>; n];
-        let roots = take(&mut self.chain);
+    pub fn consolidate(&mut self) {
+        let n = 3;
+        let mut buf = vec![None::<Rc<RefCell<Node<K>>>>; n];
+        let roots = take(&mut self.0);
         for mut node in roots.into_iter() {
-            loop {
-                let len = node.borrow().child.len();
-                if let Some(mut other) = a[len].take() {
-                    let need_swap = node.borrow().key > other.borrow().key;
-                    if need_swap {
-                        swap(&mut node, &mut other);
-                    }
-                    other.borrow_mut().parent = Rc::downgrade(&node);
-                    node.borrow_mut().child.push(other);
-                } else {
-                    break;
+            while let Some(other) = buf[node.borrow().child.len()].take() {
+                if node.borrow().key > other.borrow().key {
+                    swap(&mut node, &mut other);
                 }
+                other.borrow_mut().parent = Rc::downgrade(&node);
+                node.borrow_mut().child.push(other);
             }
-            let len = node.borrow().child.len();
-            a[len] = Some(node);
+            todo!()
         }
-        self.chain = a.into_iter().filter_map(identity).collect();
-    }
-    fn fix_top(&mut self) {
-        if let Some(i) = self
-            .chain
-            .iter()
-            .position_min_by(|x, y| x.borrow().key.cmp(&y.borrow().key))
-        {
-            self.chain.swap(0, i);
-        }
+        todo!()
     }
 }
 
@@ -118,7 +89,7 @@ impl<K: Ord + Debug> Node<K> {
 impl<K: Ord + Debug> Paren for FibonacciHeap<K> {
     fn paren(&self, w: &mut Formatter) -> fmt::Result {
         write!(w, "FibonacciHeap [")?;
-        self.chain
+        self.0
             .iter()
             .map(|node| format!("{:?}", paren::Wrapper(&*node.borrow())))
             .intersperse(",".to_owned())
@@ -173,18 +144,6 @@ mod tests {
         test.push(24);
         test.pop();
         test.pop();
-        test.push(10);
-        test.push(11);
-        test.push(12);
-        test.push(13);
-        test.push(14);
-        test.pop();
-        test.pop();
-        test.push(30);
-        test.push(31);
-        test.push(32);
-        test.push(33);
-        test.push(34);
         test.pop();
         test.pop();
     }
