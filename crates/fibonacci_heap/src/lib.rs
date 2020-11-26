@@ -5,7 +5,7 @@ use {
         cell::{Ref, RefCell},
         convert::identity,
         fmt::{self, Debug, Formatter},
-        mem::{swap, take},
+        mem::{replace, swap, take},
         rc::{Rc, Weak},
     },
 };
@@ -68,6 +68,47 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
             Some(key)
         }
     }
+    pub fn decrease_key(&mut self, x: Rc<RefCell<Node<K>>>, key: K) {
+        assert!(key <= x.borrow().key);
+        x.borrow_mut().key = key;
+        let p = Weak::upgrade(&x.borrow().parent);
+        if let Some(p) = p {
+            if x.borrow().key < p.borrow().key {
+                let x_pos = self.chain.len();
+                // cut
+                self.cut(&p, x);
+                // cascading_cut
+                let mut p = p;
+                while replace(&mut p.borrow_mut().mark, true) {
+                    let pp = Weak::upgrade(&p.borrow().parent);
+                    p = if let Some(pp) = pp {
+                        self.cut(&pp, p);
+                        pp
+                    } else {
+                        break;
+                    }
+                }
+                if self.chain[0].borrow().key > self.chain[x_pos].borrow().key {
+                    self.chain.swap(0, x_pos);
+                }
+            }
+        } else {
+            self.fix_top();
+        }
+    }
+    fn cut(&mut self, p: &Rc<RefCell<Node<K>>>, x: Rc<RefCell<Node<K>>>) {
+        let i = p
+            .borrow()
+            .child
+            .iter()
+            .position(|node| Rc::ptr_eq(node, &x))
+            .unwrap();
+        let x = p.borrow_mut().child.swap_remove(i);
+        x.borrow_mut().parent = Weak::new();
+        x.borrow_mut().mark = false;
+        self.chain.push(x);
+    }
+
     fn consolidate(&mut self) {
         let n = self.len.next_power_of_two().trailing_zeros() as usize * 2;
         let mut a = vec![None::<Rc<RefCell<Node<K>>>>; n];
@@ -200,6 +241,24 @@ mod tests {
         test.pop();
     }
 
+    #[test]
+    fn test_decreast_key() {
+        let mut test = Test::new();
+        let h0 = test.push(20);
+        test.decrease_key(Weak::upgrade(&h0).unwrap(), 18);
+        let h1 = test.push(21);
+        let h2 = test.push(22);
+        let h3 = test.push(23);
+        test.decrease_key(Weak::upgrade(&h1).unwrap(), 10);
+        test.decrease_key(Weak::upgrade(&h2).unwrap(), 14);
+        test.decrease_key(Weak::upgrade(&h3).unwrap(), 8);
+        let h4 = test.push(24);
+        test.pop();
+        test.decrease_key(Weak::upgrade(&h1).unwrap(), 7);
+        test.decrease_key(Weak::upgrade(&h2).unwrap(), 2);
+        test.decrease_key(Weak::upgrade(&h4).unwrap(), 9);
+    }
+
     struct Test {
         fib: FibonacciHeap<u32>,
         bin: BinaryHeap<Reverse<u32>>,
@@ -211,7 +270,7 @@ mod tests {
                 bin: BinaryHeap::new(),
             }
         }
-        fn push(&mut self, key: u32) {
+        fn push(&mut self, key: u32) -> Weak<RefCell<super::Node<u32>>> {
             println!(
                 "{} {} to {}",
                 Paint::red("Push").bold(),
@@ -222,6 +281,7 @@ mod tests {
             assert_eq!(Weak::upgrade(&res).unwrap().borrow().key, key);
             self.bin.push(Reverse(key));
             self.postprocess();
+            res
         }
         fn append(&mut self, other: &mut Self) {
             println!(
@@ -239,6 +299,24 @@ mod tests {
             let res = self.fib.pop();
             let exp = self.bin.pop().map(|x| x.0);
             assert_eq!(res, exp);
+            self.postprocess();
+        }
+        fn decrease_key(&mut self, x: Rc<RefCell<super::Node<u32>>>, key: u32) {
+            println!(
+                "{} {} in {} down to {}",
+                Paint::blue("Decrease a key").bold(),
+                self.fib.to_paren(),
+                &x.borrow().key,
+                key,
+            );
+            let mut vec = self.bin.drain().collect::<Vec<_>>();
+            let i = vec
+                .iter()
+                .position(|&Reverse(item)| item == x.borrow().key)
+                .unwrap();
+            vec[i] = Reverse(key);
+            self.bin = vec.iter().copied().collect::<BinaryHeap<_>>();
+            self.fib.decrease_key(x, key);
             self.postprocess();
         }
         fn postprocess(&self) {
