@@ -7,11 +7,11 @@ use std::{
 };
 
 #[derive(Debug)]
-pub struct FibonacciHeap<K> {
+pub struct FibonacciHeap<K, V> {
     len: usize,
-    chain: Vec<Rc<RefCell<Node<K>>>>,
+    chain: Vec<Rc<RefCell<Node<K, V>>>>,
 }
-impl<K: Ord + Debug> FibonacciHeap<K> {
+impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
     pub fn new() -> Self {
         Self {
             len: 0,
@@ -21,8 +21,8 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
     pub fn len(&self) -> usize {
         self.len
     }
-    pub fn push(&mut self, key: K) -> Weak<RefCell<Node<K>>> {
-        let handle = Rc::new(RefCell::new(Node::new(key)));
+    pub fn push(&mut self, key: K, value: V) -> Weak<RefCell<Node<K, V>>> {
+        let handle = Rc::new(RefCell::new(Node::new(key, value)));
         self.chain.push(Rc::clone(&handle));
         if self.chain.first().unwrap().borrow().key > self.chain.last().unwrap().borrow().key {
             let len = self.chain.len();
@@ -47,7 +47,7 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
             .first()
             .map(|node| Ref::map(node.borrow(), |node| &node.key))
     }
-    pub fn pop(&mut self) -> Option<K> {
+    pub fn pop(&mut self) -> Option<(K, V)> {
         if self.chain.is_empty() {
             None
         } else {
@@ -55,6 +55,7 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
             let Node {
                 mark: _mark,
                 key,
+                value,
                 mut child,
                 parent,
             } = Rc::try_unwrap(self.chain.swap_remove(0))
@@ -64,10 +65,10 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
             self.chain.append(&mut child);
             self.consolidate();
             self.fix_top();
-            Some(key)
+            Some((key, value))
         }
     }
-    pub fn decrease_key(&mut self, x: Rc<RefCell<Node<K>>>, key: K) {
+    pub fn decrease_key(&mut self, x: Rc<RefCell<Node<K, V>>>, key: K) {
         assert!(
             key <= x.borrow().key,
             "A new key is greater than an old one: {:?} vs {:?}",
@@ -98,7 +99,7 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
             self.fix_top();
         }
     }
-    fn cut(&mut self, p: &Rc<RefCell<Node<K>>>, x: Rc<RefCell<Node<K>>>) {
+    fn cut(&mut self, p: &Rc<RefCell<Node<K, V>>>, x: Rc<RefCell<Node<K, V>>>) {
         let i = p
             .borrow()
             .child
@@ -113,7 +114,7 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
 
     fn consolidate(&mut self) {
         let n = (self.len.next_power_of_two().trailing_zeros() + 2) as usize * 2;
-        let mut a = vec![None::<Rc<RefCell<Node<K>>>>; n];
+        let mut a = vec![None::<Rc<RefCell<Node<K, V>>>>; n];
         let roots = take(&mut self.chain);
         for mut node in roots.into_iter() {
             loop {
@@ -147,17 +148,19 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
 }
 
 #[derive(Debug)]
-pub struct Node<K> {
+pub struct Node<K, V> {
     mark: bool,
     key: K,
-    child: Vec<Rc<RefCell<Node<K>>>>,
-    parent: Weak<RefCell<Node<K>>>,
+    value: V,
+    child: Vec<Rc<RefCell<Node<K, V>>>>,
+    parent: Weak<RefCell<Node<K, V>>>,
 }
-impl<K: Ord + Debug> Node<K> {
-    pub fn new(key: K) -> Self {
+impl<K: Ord + Debug, V: Debug> Node<K, V> {
+    pub fn new(key: K, value: V) -> Self {
         Self {
             mark: false,
             key,
+            value,
             child: Vec::new(),
             parent: Weak::new(),
         }
@@ -338,7 +341,7 @@ mod tests {
     }
 
     struct Test {
-        fib: FibonacciHeap<u32>,
+        fib: FibonacciHeap<u32, ()>,
         bin: BinaryHeap<Reverse<u32>>,
     }
     impl Test {
@@ -348,14 +351,14 @@ mod tests {
                 bin: BinaryHeap::new(),
             }
         }
-        fn push(&mut self, key: u32) -> Weak<RefCell<super::Node<u32>>> {
+        fn push(&mut self, key: u32) -> Weak<RefCell<super::Node<u32, ()>>> {
             println!(
                 "{} {} to {}",
                 Paint::red("Push").bold(),
                 key,
                 self.fib.to_paren()
             );
-            let res = self.fib.push(key);
+            let res = self.fib.push(key, ());
             assert_eq!(Weak::upgrade(&res).unwrap().borrow().key, key);
             self.bin.push(Reverse(key));
             self.postprocess();
@@ -374,12 +377,12 @@ mod tests {
         }
         fn pop(&mut self) {
             println!("{} from {}", Paint::blue("Pop").bold(), self.fib.to_paren());
-            let res = self.fib.pop();
+            let res = self.fib.pop().map(|(key, ())| key);
             let exp = self.bin.pop().map(|x| x.0);
             assert_eq!(res, exp);
             self.postprocess();
         }
-        fn decrease_key(&mut self, x: Rc<RefCell<super::Node<u32>>>, key: u32) {
+        fn decrease_key(&mut self, x: Rc<RefCell<super::Node<u32, ()>>>, key: u32) {
             println!(
                 "{} {} in {} down to {}",
                 Paint::blue("Decrease a key").bold(),
@@ -398,27 +401,27 @@ mod tests {
             self.postprocess();
         }
         fn postprocess(&self) {
-            // println!("{}", Paint::green("Postprocess"));
-            // println!("fib = {}", self.fib.to_paren());
-            // println!("peek = {:?}", self.fib.peek());
-            // assert_eq!(
-            //     self.fib.peek().map(|x| *x),
-            //     self.bin.peek().map(|&Reverse(x)| x)
-            // );
-            // self.fib.validate();
-            // println!();
+            println!("{}", Paint::green("Postprocess"));
+            println!("fib = {}", self.fib.to_paren());
+            println!("peek = {:?}", self.fib.peek());
+            assert_eq!(
+                self.fib.peek().map(|x| *x),
+                self.bin.peek().map(|&Reverse(x)| x)
+            );
+            self.fib.validate();
+            println!();
         }
     }
 
     pub trait Validate {
         fn validate(&self);
     }
-    impl<K: Ord + Debug> Validate for FibonacciHeap<K> {
+    impl<K: Ord + Debug, V: Debug> Validate for FibonacciHeap<K, V> {
         fn validate(&self) {
             self.chain.iter().for_each(|node| node.validate())
         }
     }
-    impl<K: Ord + Debug> Validate for Rc<RefCell<super::Node<K>>> {
+    impl<K: Ord + Debug, V: Debug> Validate for Rc<RefCell<super::Node<K, V>>> {
         fn validate(&self) {
             for child in self.borrow().child.iter() {
                 assert!(
@@ -428,7 +431,7 @@ mod tests {
             }
         }
     }
-    impl<K: Ord + Debug> Paren for FibonacciHeap<K> {
+    impl<K: Ord + Debug, V: Debug> Paren for FibonacciHeap<K, V> {
         fn paren(&self, w: &mut Formatter) -> fmt::Result {
             write!(w, "FibonacciHeap {{ len: {}, paren:", self.len())?;
             self.chain
@@ -440,7 +443,7 @@ mod tests {
             write!(w, "}}")
         }
     }
-    impl<K: Ord + Debug> Paren for super::Node<K> {
+    impl<K: Ord + Debug, V: Debug> Paren for super::Node<K, V> {
         fn paren(&self, w: &mut Formatter) -> fmt::Result {
             write!(w, "(")?;
             write!(w, "{:?}", &self.key)?;
