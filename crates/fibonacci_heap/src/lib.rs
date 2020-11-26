@@ -22,21 +22,28 @@ impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
         self.len
     }
     pub fn push(&mut self, key: K, value: V) -> Weak<RefCell<Node<K, V>>> {
-        let handle = Rc::new(RefCell::new(Node::new(key, value)));
+        let handle = Rc::new(RefCell::new(Node::new(key, value, self.chain.len())));
         self.chain.push(Rc::clone(&handle));
         if self.chain.first().unwrap().borrow().key > self.chain.last().unwrap().borrow().key {
             let len = self.chain.len();
-            self.chain.swap(0, len - 1);
+            self.swap_heaps(0, len - 1);
         }
         self.len += 1;
         Rc::downgrade(&handle)
     }
+    // TODO: make this O(1)
     pub fn append(&mut self, other: &mut Self) {
+        other
+            .chain
+            .iter_mut()
+            .for_each(|root| root.borrow_mut().position += self.chain.len());
         self.len += other.len;
         if let Some(me) = self.chain.first_mut() {
             if let Some(other) = other.chain.first_mut() {
                 if me.borrow().key > other.borrow().key {
                     swap(&mut *me, &mut *other);
+                    me.borrow_mut().position = 0;
+                    other.borrow_mut().position = self.chain.len();
                 }
             }
         }
@@ -93,25 +100,32 @@ impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
                     }
                 }
                 if self.chain[0].borrow().key > self.chain[x_pos].borrow().key {
-                    self.chain.swap(0, x_pos);
+                    self.swap_heaps(0, x_pos);
                 }
             }
         } else {
-            self.fix_top();
+            let x_pos = x.borrow().position;
+            if self.chain[0].borrow().key > self.chain[x_pos].borrow().key {
+                self.swap_heaps(0, x_pos);
+            }
         }
     }
+    fn swap_heaps(&mut self, i: usize, j: usize) {
+        self.chain.swap(i, j);
+        self.chain[i].borrow_mut().position = i;
+        self.chain[j].borrow_mut().position = j;
+    }
     fn cut(&mut self, p: &Rc<RefCell<Node<K, V>>>, x: Rc<RefCell<Node<K, V>>>) {
-        let i = x.borrow().position.unwrap();
+        let i = x.borrow().position;
         let x = p.borrow_mut().child.swap_remove(i);
         if let Some(y) = p.borrow_mut().child.get_mut(i) {
-            y.borrow_mut().position = Some(i);
+            y.borrow_mut().position = i;
         }
         x.borrow_mut().parent = Weak::new();
-        x.borrow_mut().position = None;
+        x.borrow_mut().position = self.chain.len();
         x.borrow_mut().mark = false;
         self.chain.push(x);
     }
-
     fn consolidate(&mut self) {
         let n = (self.len.next_power_of_two().trailing_zeros() + 2) as usize * 2;
         let mut a = vec![None::<Rc<RefCell<Node<K, V>>>>; n];
@@ -125,7 +139,7 @@ impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
                         swap(&mut node, &mut other);
                     }
                     other.borrow_mut().parent = Rc::downgrade(&node);
-                    other.borrow_mut().position = Some(node.borrow().child.len());
+                    other.borrow_mut().position = node.borrow().child.len();
                     node.borrow_mut().child.push(other);
                 } else {
                     break;
@@ -134,7 +148,15 @@ impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
             let len = node.borrow().child.len();
             a[len] = Some(node);
         }
-        self.chain = a.into_iter().filter_map(identity).collect();
+        self.chain = a
+            .into_iter()
+            .filter_map(identity)
+            .enumerate()
+            .map(|(i, child)| {
+                child.borrow_mut().position = i;
+                child
+            })
+            .collect();
     }
     fn fix_top(&mut self) {
         if let Some((i, _)) = self
@@ -143,7 +165,7 @@ impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
             .enumerate()
             .min_by(|(_, x), (_, y)| x.borrow().key.cmp(&y.borrow().key))
         {
-            self.chain.swap(0, i);
+            self.swap_heaps(0, i);
         }
     }
 }
@@ -151,18 +173,18 @@ impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
 #[derive(Debug)]
 pub struct Node<K, V> {
     mark: bool,
-    position: Option<usize>,
+    position: usize,
     key: K,
     value: V,
     child: Vec<Rc<RefCell<Node<K, V>>>>,
     parent: Weak<RefCell<Node<K, V>>>,
 }
 impl<K: Ord + Debug, V: Debug> Node<K, V> {
-    pub fn new(key: K, value: V) -> Self {
+    pub fn new(key: K, value: V, position: usize) -> Self {
         Self {
             mark: false,
             key,
-            position: None,
+            position,
             value,
             child: Vec::new(),
             parent: Weak::new(),
@@ -421,7 +443,10 @@ mod tests {
     }
     impl<K: Ord + Debug, V: Debug> Validate for FibonacciHeap<K, V> {
         fn validate(&self) {
-            self.chain.iter().for_each(|node| node.validate())
+            self.chain.iter().enumerate().for_each(|(i, node)| {
+                node.validate();
+                assert_eq!(i, node.borrow().position);
+            })
         }
     }
     impl<K: Ord + Debug, V: Debug> Validate for Rc<RefCell<super::Node<K, V>>> {
@@ -432,7 +457,7 @@ mod tests {
                     "Parent of a child is not me."
                 );
                 assert!(Rc::ptr_eq(
-                    &self.borrow().child[child.borrow().position.unwrap()],
+                    &self.borrow().child[child.borrow().position],
                     &child
                 ));
             }
