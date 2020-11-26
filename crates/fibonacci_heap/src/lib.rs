@@ -144,7 +144,13 @@ mod tests {
     use {
         super::FibonacciHeap,
         paren::Paren,
-        std::{cmp::Reverse, collections::BinaryHeap},
+        std::{
+            cell::RefCell,
+            cmp::Reverse,
+            collections::BinaryHeap,
+            fmt::Debug,
+            rc::{Rc, Weak},
+        },
         yansi::Paint,
     };
 
@@ -237,7 +243,27 @@ mod tests {
                 self.fib.peek().map(|x| *x),
                 self.bin.peek().map(|&Reverse(x)| x)
             );
+            self.fib.validate();
             println!();
+        }
+    }
+
+    pub trait Validate {
+        fn validate(&self);
+    }
+    impl<K: Ord + Debug> Validate for FibonacciHeap<K> {
+        fn validate(&self) {
+            self.chain.iter().for_each(|node| node.validate())
+        }
+    }
+    impl<K: Ord + Debug> Validate for Rc<RefCell<super::Node<K>>> {
+        fn validate(&self) {
+            for child in self.borrow().child.iter() {
+                assert!(
+                    Weak::ptr_eq(&child.borrow().parent, &Rc::downgrade(self)),
+                    "Parent of a child is not me."
+                );
+            }
         }
     }
 }
