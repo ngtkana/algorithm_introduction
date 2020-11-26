@@ -1,12 +1,9 @@
-use {
-    itertools::Itertools,
-    std::{
-        cell::{Ref, RefCell},
-        convert::identity,
-        fmt::Debug,
-        mem::{replace, swap, take},
-        rc::{Rc, Weak},
-    },
+use std::{
+    cell::{Ref, RefCell},
+    convert::identity,
+    fmt::Debug,
+    mem::{replace, swap, take},
+    rc::{Rc, Weak},
 };
 
 #[derive(Debug)]
@@ -138,10 +135,11 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
         self.chain = a.into_iter().filter_map(identity).collect();
     }
     fn fix_top(&mut self) {
-        if let Some(i) = self
+        if let Some((i, _)) = self
             .chain
             .iter()
-            .position_min_by(|x, y| x.borrow().key.cmp(&y.borrow().key))
+            .enumerate()
+            .min_by(|(_, x), (_, y)| x.borrow().key.cmp(&y.borrow().key))
         {
             self.chain.swap(0, i);
         }
@@ -275,6 +273,70 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_rand_append() {
+        rand_append(100, 100);
+    }
+
+    fn rand_append(t: u32, q: u32) {
+        let mut rng = StdRng::seed_from_u64(42);
+
+        fn gen_heap(q: usize, rng: &mut StdRng) -> Test {
+            let mut test = Test::new();
+            let mut vec = Vec::new();
+            for _ in 0..q {
+                match rng.gen_range(0, 3) {
+                    0 => vec.push(test.push(rng.gen_range(0, 100))),
+                    1 => test.pop(),
+                    2 => {
+                        if vec.is_empty() {
+                            continue;
+                        }
+                        let h = Weak::upgrade(&vec[rng.gen_range(0, vec.len())]);
+                        if let Some(h) = h {
+                            let key = h.borrow().key;
+                            if key == 0 {
+                                continue;
+                            }
+                            test.decrease_key(h, rng.gen_range(0, key));
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            test
+        }
+
+        for _ in 0..t {
+            let mut test = Test::new();
+            let mut vec = Vec::new();
+            for _ in 0..q {
+                match rng.gen_range(0, 4) {
+                    0 => vec.push(test.push(rng.gen_range(0, 100))),
+                    1 => test.pop(),
+                    2 => {
+                        if vec.is_empty() {
+                            continue;
+                        }
+                        let h = Weak::upgrade(&vec[rng.gen_range(0, vec.len())]);
+                        if let Some(h) = h {
+                            let key = h.borrow().key;
+                            if key == 0 {
+                                continue;
+                            }
+                            test.decrease_key(h, rng.gen_range(0, key));
+                        }
+                    }
+                    3 => {
+                        let mut other = gen_heap(rng.gen_range(0, 30), &mut rng);
+                        test.append(&mut other);
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
     struct Test {
         fib: FibonacciHeap<u32>,
         bin: BinaryHeap<Reverse<u32>>,
@@ -336,15 +398,15 @@ mod tests {
             self.postprocess();
         }
         fn postprocess(&self) {
-            println!("{}", Paint::green("Postprocess"));
-            println!("fib = {}", self.fib.to_paren());
-            println!("peek = {:?}", self.fib.peek());
-            assert_eq!(
-                self.fib.peek().map(|x| *x),
-                self.bin.peek().map(|&Reverse(x)| x)
-            );
-            self.fib.validate();
-            println!();
+            // println!("{}", Paint::green("Postprocess"));
+            // println!("fib = {}", self.fib.to_paren());
+            // println!("peek = {:?}", self.fib.peek());
+            // assert_eq!(
+            //     self.fib.peek().map(|x| *x),
+            //     self.bin.peek().map(|&Reverse(x)| x)
+            // );
+            // self.fib.validate();
+            // println!();
         }
     }
 
