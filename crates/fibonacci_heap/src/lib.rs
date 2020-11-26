@@ -21,6 +21,9 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
             chain: Vec::new(),
         }
     }
+    pub fn len(&self) -> usize {
+        self.len
+    }
     pub fn push(&mut self, key: K) -> Weak<RefCell<Node<K>>> {
         let handle = Rc::new(RefCell::new(Node::new(key)));
         self.chain.push(Rc::clone(&handle));
@@ -112,13 +115,13 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
     }
 
     fn consolidate(&mut self) {
-        let n = self.len.next_power_of_two().trailing_zeros() as usize * 2;
+        let n = (self.len.next_power_of_two().trailing_zeros() + 2) as usize * 2;
         let mut a = vec![None::<Rc<RefCell<Node<K>>>>; n];
         let roots = take(&mut self.chain);
         for mut node in roots.into_iter() {
             loop {
-                let len = node.borrow().child.len();
-                if let Some(mut other) = a[len].take() {
+                let deg = node.borrow().child.len();
+                if let Some(mut other) = a[deg].take() {
                     let need_swap = node.borrow().key > other.borrow().key;
                     if need_swap {
                         swap(&mut node, &mut other);
@@ -169,6 +172,7 @@ mod tests {
         super::FibonacciHeap,
         itertools::Itertools,
         paren::Paren,
+        rand::prelude::*,
         std::{
             cell::RefCell,
             cmp::Reverse,
@@ -236,6 +240,39 @@ mod tests {
         test.decrease_key(Weak::upgrade(&h1).unwrap(), 7);
         test.decrease_key(Weak::upgrade(&h2).unwrap(), 2);
         test.decrease_key(Weak::upgrade(&h4).unwrap(), 9);
+    }
+
+    #[test]
+    fn test_rand_no_append() {
+        rand_no_append(100, 100);
+    }
+
+    fn rand_no_append(t: u32, q: u32) {
+        let mut rng = StdRng::seed_from_u64(42);
+        for _ in 0..t {
+            let mut test = Test::new();
+            let mut vec = Vec::new();
+            for _ in 0..q {
+                match rng.gen_range(0, 3) {
+                    0 => vec.push(test.push(rng.gen_range(0, 100))),
+                    1 => test.pop(),
+                    2 => {
+                        if vec.is_empty() {
+                            continue;
+                        }
+                        let h = Weak::upgrade(&vec[rng.gen_range(0, vec.len())]);
+                        if let Some(h) = h {
+                            let key = h.borrow().key;
+                            if key == 0 {
+                                continue;
+                            }
+                            test.decrease_key(h, rng.gen_range(0, key));
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
     }
 
     struct Test {
@@ -331,14 +368,14 @@ mod tests {
     }
     impl<K: Ord + Debug> Paren for FibonacciHeap<K> {
         fn paren(&self, w: &mut Formatter) -> fmt::Result {
-            write!(w, "FibonacciHeap [")?;
+            write!(w, "FibonacciHeap {{ len: {}, paren:", self.len())?;
             self.chain
                 .iter()
                 .map(|node| format!("{:?}", paren::Wrapper(&*node.borrow())))
                 .intersperse(",".to_owned())
                 .map(|s| write!(w, "{}", s))
                 .collect::<fmt::Result>()?;
-            write!(w, "]")
+            write!(w, "}}")
         }
     }
     impl<K: Ord + Debug> Paren for super::Node<K> {
