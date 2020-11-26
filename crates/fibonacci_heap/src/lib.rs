@@ -68,15 +68,18 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
         }
     }
     pub fn decrease_key(&mut self, x: Rc<RefCell<Node<K>>>, key: K) {
-        assert!(key <= x.borrow().key);
+        assert!(
+            key <= x.borrow().key,
+            "A new key is greater than an old one: {:?} vs {:?}",
+            &key,
+            x.borrow().key
+        );
         x.borrow_mut().key = key;
         let p = Weak::upgrade(&x.borrow().parent);
         if let Some(p) = p {
             if x.borrow().key < p.borrow().key {
                 let x_pos = self.chain.len();
-                // cut
                 self.cut(&p, x);
-                // cascading_cut
                 let mut p = p;
                 while replace(&mut p.borrow_mut().mark, true) {
                     let pp = Weak::upgrade(&p.borrow().parent);
