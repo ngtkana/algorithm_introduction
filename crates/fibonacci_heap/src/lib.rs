@@ -22,13 +22,15 @@ impl<K: Ord + Debug> FibonacciHeap<K> {
             chain: Vec::new(),
         }
     }
-    pub fn push(&mut self, key: K) {
-        self.chain.push(Rc::new(RefCell::new(Node::new(key))));
+    pub fn push(&mut self, key: K) -> Weak<RefCell<Node<K>>> {
+        let handle = Rc::new(RefCell::new(Node::new(key)));
+        self.chain.push(Rc::clone(&handle));
         if self.chain.first().unwrap().borrow().key > self.chain.last().unwrap().borrow().key {
             let len = self.chain.len();
             self.chain.swap(0, len - 1);
         }
         self.len += 1;
+        Rc::downgrade(&handle)
     }
     pub fn append(&mut self, other: &mut Self) {
         self.len += other.len;
@@ -213,7 +215,8 @@ mod tests {
                 key,
                 self.fib.to_paren()
             );
-            self.fib.push(key);
+            let res = self.fib.push(key);
+            assert_eq!(Weak::upgrade(&res).unwrap().borrow().key, key);
             self.bin.push(Reverse(key));
             self.postprocess();
         }
