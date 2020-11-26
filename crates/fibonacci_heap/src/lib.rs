@@ -56,6 +56,7 @@ impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
                 mark: _mark,
                 key,
                 value,
+                position: _position,
                 mut child,
                 parent,
             } = Rc::try_unwrap(self.chain.swap_remove(0))
@@ -100,14 +101,13 @@ impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
         }
     }
     fn cut(&mut self, p: &Rc<RefCell<Node<K, V>>>, x: Rc<RefCell<Node<K, V>>>) {
-        let i = p
-            .borrow()
-            .child
-            .iter()
-            .position(|node| Rc::ptr_eq(node, &x))
-            .unwrap();
+        let i = x.borrow().position.unwrap();
         let x = p.borrow_mut().child.swap_remove(i);
+        if let Some(y) = p.borrow_mut().child.get_mut(i) {
+            y.borrow_mut().position = Some(i);
+        }
         x.borrow_mut().parent = Weak::new();
+        x.borrow_mut().position = None;
         x.borrow_mut().mark = false;
         self.chain.push(x);
     }
@@ -125,6 +125,7 @@ impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
                         swap(&mut node, &mut other);
                     }
                     other.borrow_mut().parent = Rc::downgrade(&node);
+                    other.borrow_mut().position = Some(node.borrow().child.len());
                     node.borrow_mut().child.push(other);
                 } else {
                     break;
@@ -150,6 +151,7 @@ impl<K: Ord + Debug, V: Debug> FibonacciHeap<K, V> {
 #[derive(Debug)]
 pub struct Node<K, V> {
     mark: bool,
+    position: Option<usize>,
     key: K,
     value: V,
     child: Vec<Rc<RefCell<Node<K, V>>>>,
@@ -160,6 +162,7 @@ impl<K: Ord + Debug, V: Debug> Node<K, V> {
         Self {
             mark: false,
             key,
+            position: None,
             value,
             child: Vec::new(),
             parent: Weak::new(),
@@ -428,6 +431,10 @@ mod tests {
                     Weak::ptr_eq(&child.borrow().parent, &Rc::downgrade(self)),
                     "Parent of a child is not me."
                 );
+                assert!(Rc::ptr_eq(
+                    &self.borrow().child[child.borrow().position.unwrap()],
+                    &child
+                ));
             }
         }
     }
