@@ -280,7 +280,10 @@ mod test {
         super::{Rec, Veb},
         dbg::BooleanSlice,
         rand::prelude::*,
-        std::collections::BTreeSet,
+        std::{
+            collections::BTreeSet,
+            time::{Duration, Instant},
+        },
         yansi::Paint,
     };
 
@@ -294,7 +297,7 @@ mod test {
     fn test_rand() {
         let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..20 {
-            let lg = rng.gen_range(1, 7);
+            let lg = rng.gen_range(1, 16);
             let mut test = Test::new(lg);
             let len = 1 << lg;
             for _ in 0..100 {
@@ -310,6 +313,34 @@ mod test {
             }
         }
     }
+
+    #[test]
+    fn test_speed() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let lg = 24;
+        let start = Instant::now();
+        let mut veb = Veb::new(lg);
+        let end = Instant::now();
+        println!("Construction: {:?}", end - start);
+
+        let len = 1 << lg;
+        let q = 1_000_000;
+        let start = Instant::now();
+        for _ in 0..q {
+            match rng.gen_range(0, 6) {
+                0 => drop(veb.contains(rng.gen_range(0, len))),
+                1 => drop(veb.min()),
+                2 => drop(veb.max()),
+                3 => drop(veb.prev(rng.gen_range(0, len))),
+                4 => drop(veb.succ(rng.gen_range(0, len))),
+                5 => drop(veb.insert(rng.gen_range(0, len))),
+                _ => unreachable!(),
+            }
+        }
+        let end = Instant::now();
+        println!("{} Queries: {:?}", q, end - start);
+    }
+
     struct Test {
         veb: Veb,
         set: BTreeSet<usize>,
