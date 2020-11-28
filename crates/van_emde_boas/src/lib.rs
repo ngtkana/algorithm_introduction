@@ -1,4 +1,7 @@
-use std::{iter::repeat_with, mem::swap};
+use std::{
+    iter::repeat_with,
+    mem::{replace, swap},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Veb {
@@ -59,6 +62,24 @@ impl Veb {
         match self {
             Veb::Base(base) => base.insert(x),
             Veb::Rec(rec) => rec.insert(x),
+        }
+    }
+    pub fn delete(&mut self, x: usize) -> bool {
+        match self {
+            Veb::Base(base) => base.delete(x),
+            Veb::Rec(rec) => rec.delete(x),
+        }
+    }
+    pub fn collect_vec(&self) -> Vec<usize> {
+        if let Some(mut x) = self.min() {
+            let mut vec = vec![x];
+            while let Some(y) = self.succ(x) {
+                vec.push(y);
+                x = y;
+            }
+            vec
+        } else {
+            Vec::new()
         }
     }
     pub fn collect_bitvec(&self) -> Vec<bool> {
@@ -124,6 +145,9 @@ impl Base {
     pub fn insert(&mut self, x: usize) {
         self.0[x] = true
     }
+    pub fn delete(&mut self, x: usize) -> bool {
+        replace(&mut self.0[x], false)
+    }
     pub fn collect_bitvec(&self) -> Vec<bool> {
         let mut vec = vec![false; self.len()];
         self.copy_bitvec(&mut vec);
@@ -168,7 +192,7 @@ impl Rec {
                 return true;
             }
         }
-        let (high, low) = self.decompose(x);
+        let (high, low) = decompose(x, self.lower);
         self.cluster[high].contains(low)
     }
     pub fn min(&self) -> Option<usize> {
@@ -184,13 +208,13 @@ impl Rec {
         if max < x {
             Some(max)
         } else {
-            let (high, low) = self.decompose(x);
+            let (high, low) = decompose(x, self.lower);
             if self.cluster[high].min().map_or(false, |y| y < low) {
                 let low = self.cluster[high].prev(low).unwrap();
-                Some(self.index(high, low))
+                Some(index(high, low, self.lower))
             } else if let Some(high) = self.summary.prev(high) {
                 let low = self.cluster[high].max().unwrap();
-                Some(self.index(high, low))
+                Some(index(high, low, self.lower))
             } else if min < x {
                 Some(min)
             } else {
@@ -205,13 +229,13 @@ impl Rec {
         if x < min {
             Some(min)
         } else {
-            let (high, low) = self.decompose(x);
+            let (high, low) = decompose(x, self.lower);
             if self.cluster[high].max().map_or(false, |y| low < y) {
                 let low = self.cluster[high].succ(low).unwrap();
-                Some(self.index(high, low))
+                Some(index(high, low, self.lower))
             } else if let Some(high) = self.summary.succ(high) {
                 let low = self.cluster[high].min().unwrap();
-                Some(self.index(high, low))
+                Some(index(high, low, self.lower))
             } else if x < max {
                 Some(max)
             } else {
@@ -230,7 +254,7 @@ impl Rec {
                 if *max < x {
                     *max = x;
                 }
-            } else {
+            } else if *min != x && *max != x {
                 let mut x = x;
                 if x < *min {
                     swap(&mut x, min);
@@ -238,7 +262,7 @@ impl Rec {
                 if *max < x {
                     swap(max, &mut x);
                 }
-                let (high, low) = self.decompose(x);
+                let (high, low) = decompose(x, self.lower);
                 if self.cluster[high].is_empty() {
                     self.summary.insert(high);
                 }
@@ -246,6 +270,51 @@ impl Rec {
             }
         } else {
             self.minmax = Some((x, x));
+        }
+    }
+    pub fn delete(&mut self, x: usize) -> bool {
+        if let Some((min, max)) = self.minmax.as_mut() {
+            if min == max {
+                if *min == x {
+                    self.minmax = None;
+                    true
+                } else {
+                    false
+                }
+            } else {
+                let mut x = x;
+                if *min == x {
+                    if let Some(high) = self.summary.min() {
+                        let low = self.cluster[high].min().unwrap();
+                        x = index(high, low, self.lower);
+                        *min = x;
+                    } else {
+                        *min = *max;
+                        return true;
+                    }
+                } else if *max == x {
+                    if let Some(high) = self.summary.max() {
+                        let low = self.cluster[high].max().unwrap();
+                        x = index(high, low, self.lower);
+                        *max = x;
+                    } else {
+                        *max = *min;
+                        return true;
+                    }
+                }
+                let (high, low) = decompose(x, self.lower);
+                if self.cluster[high].delete(low) {
+                    if self.cluster[high].is_empty() {
+                        let res = self.summary.delete(high);
+                        assert!(res);
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+        } else {
+            false
         }
     }
     pub fn collect_bitvec(&self) -> Vec<bool> {
@@ -263,51 +332,46 @@ impl Rec {
             child.copy_bitvec(&mut vec[range])
         });
     }
-    fn index(&self, high: usize, low: usize) -> usize {
-        (high << self.lower) + low
-    }
-    fn decompose(&self, x: usize) -> (usize, usize) {
-        (
-            x >> self.lower,
-            x & (std::usize::MAX >> (std::mem::size_of::<usize>() as u32 * 8 - self.lower)),
-        )
-    }
+}
+fn index(high: usize, low: usize, lower: u32) -> usize {
+    (high << lower) + low
+}
+fn decompose(x: usize, lower: u32) -> (usize, usize) {
+    (
+        x >> lower,
+        x & (std::usize::MAX >> (std::mem::size_of::<usize>() as u32 * 8 - lower)),
+    )
 }
 
 #[cfg(test)]
 mod test {
     use {
-        super::{Rec, Veb},
-        dbg::BooleanSlice,
+        super::Veb,
         rand::prelude::*,
-        std::{
-            collections::BTreeSet,
-            time::{Duration, Instant},
-        },
+        std::{collections::BTreeSet, time::Instant},
         yansi::Paint,
     };
 
     #[test]
     fn test_decompose() {
-        let rec = Rec::new(4);
-        assert_eq!(rec.decompose(10), (2, 2));
+        assert_eq!(super::decompose(10, 2), (2, 2));
     }
 
     #[test]
     fn test_rand() {
         let mut rng = StdRng::seed_from_u64(42);
-        for _ in 0..20 {
-            let lg = rng.gen_range(1, 16);
+        for lg in 1..18 {
             let mut test = Test::new(lg);
             let len = 1 << lg;
             for _ in 0..100 {
-                match rng.gen_range(0, 6) {
+                match rng.gen_range(0, 7) {
                     0 => test.contains(rng.gen_range(0, len)),
                     1 => test.min(),
                     2 => test.max(),
                     3 => test.prev(rng.gen_range(0, len)),
                     4 => test.succ(rng.gen_range(0, len)),
                     5 => test.insert(rng.gen_range(0, len)),
+                    6 => test.delete(rng.gen_range(0, len)),
                     _ => unreachable!(),
                 }
             }
@@ -317,23 +381,24 @@ mod test {
     #[test]
     fn test_speed() {
         let mut rng = StdRng::seed_from_u64(42);
-        let lg = 24;
+        let lg = 16;
         let start = Instant::now();
         let mut veb = Veb::new(lg);
         let end = Instant::now();
         println!("Construction: {:?}", end - start);
 
         let len = 1 << lg;
-        let q = 1_000_000;
+        let q = 100_000;
         let start = Instant::now();
         for _ in 0..q {
-            match rng.gen_range(0, 6) {
+            match rng.gen_range(0, 7) {
                 0 => drop(veb.contains(rng.gen_range(0, len))),
                 1 => drop(veb.min()),
                 2 => drop(veb.max()),
                 3 => drop(veb.prev(rng.gen_range(0, len))),
                 4 => drop(veb.succ(rng.gen_range(0, len))),
                 5 => drop(veb.insert(rng.gen_range(0, len))),
+                6 => drop(veb.delete(rng.gen_range(0, len))),
                 _ => unreachable!(),
             }
         }
@@ -355,7 +420,7 @@ mod test {
             res
         }
         fn contains(&self, x: usize) {
-            println!("{}: {:?}", Paint::yellow("Red").bold(), x);
+            println!("{}: {:?}", Paint::yellow("Contains").bold(), x);
             assert_eq!(self.veb.contains(x), self.set.contains(&x));
             self.postproces();
         }
@@ -385,16 +450,16 @@ mod test {
             self.set.insert(x);
             self.postproces();
         }
+        fn delete(&mut self, x: usize) {
+            println!("{}: {:?}", Paint::cyan("Delete").bold(), x);
+            let result = self.veb.delete(x);
+            let expected = self.set.remove(&x);
+            assert_eq!(result, expected);
+            self.postproces();
+        }
         fn postproces(&self) {
-            let bitvec = self.veb.collect_bitvec();
             println!("set = {:?}", &self.set);
-            println!("veb = {:?}", BooleanSlice(&bitvec));
-            let result = bitvec
-                .iter()
-                .enumerate()
-                .filter(|&(_, &b)| b)
-                .map(|(i, _)| i)
-                .collect::<Vec<_>>();
+            let result = self.veb.collect_vec();
             let expected = self.set.iter().copied().collect::<Vec<_>>();
             assert_eq!(&result, &expected);
         }
