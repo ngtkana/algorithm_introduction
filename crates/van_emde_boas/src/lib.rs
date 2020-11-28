@@ -1,6 +1,6 @@
 use std::{
     iter::repeat_with,
-    mem::{replace, swap},
+    mem::{size_of, swap},
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -10,8 +10,8 @@ pub enum Veb {
 }
 impl Veb {
     pub fn new(lg: u32) -> Self {
-        if lg == 1 {
-            Veb::Base(Base::new())
+        if lg <= 6 {
+            Veb::Base(Base::new(lg))
         } else {
             Veb::Rec(Rec::new(lg))
         }
@@ -82,80 +82,72 @@ impl Veb {
             Vec::new()
         }
     }
-    pub fn collect_bitvec(&self) -> Vec<bool> {
-        let mut vec = vec![false; self.len()];
-        self.copy_bitvec(&mut vec);
-        vec
-    }
-    fn copy_bitvec(&self, vec: &mut [bool]) {
-        match self {
-            Veb::Base(base) => base.copy_bitvec(vec),
-            Veb::Rec(rec) => rec.copy_bitvec(vec),
-        }
-    }
 }
 #[derive(Debug, Clone, PartialEq)]
-pub struct Base([bool; 2]);
+pub struct Base {
+    len: usize,
+    bit: u64,
+}
 impl Base {
-    pub fn new() -> Self {
-        Self([false; 2])
+    pub fn new(lg: u32) -> Self {
+        Self {
+            bit: 0,
+            len: 1 << lg,
+        }
     }
     pub fn len(&self) -> usize {
-        2
+        self.len
     }
     pub fn is_empty(&self) -> bool {
-        self.0.iter().all(|&b| !b)
+        self.bit == 0
     }
     pub fn contains(&self, x: usize) -> bool {
-        assert!(x < 2);
-        self.0[x]
+        assert!(x < self.len());
+        self.bit >> x & 1 == 1
     }
     pub fn min(&self) -> Option<usize> {
-        if self.0[0] {
-            Some(0)
-        } else if self.0[1] {
-            Some(1)
-        } else {
+        if self.is_empty() {
             None
+        } else {
+            Some(self.bit.trailing_zeros() as usize)
         }
     }
     pub fn max(&self) -> Option<usize> {
-        if self.0[1] {
-            Some(1)
-        } else if self.0[0] {
-            Some(0)
-        } else {
+        if self.is_empty() {
             None
+        } else {
+            Some(size_of::<u64>() as usize * 8 - self.bit.leading_zeros() as usize - 1)
         }
     }
     pub fn prev(&self, x: usize) -> Option<usize> {
-        if x == 1 && self.0[0] {
-            Some(0)
-        } else {
+        let bit = self.bit & ((1 << x) - 1);
+        if bit == 0 {
             None
+        } else {
+            Some(bit.trailing_zeros() as usize)
         }
     }
     pub fn succ(&self, x: usize) -> Option<usize> {
-        if x == 0 && self.0[1] {
-            Some(1)
-        } else {
+        if x == size_of::<u64>() as usize * 8 - 1 {
             None
+        } else {
+            let bit = self.bit & std::u64::MAX << (x + 1);
+            if bit == 0 {
+                None
+            } else {
+                Some(size_of::<u64>() as usize * 8 - bit.leading_zeros() as usize - 1)
+            }
         }
     }
     pub fn insert(&mut self, x: usize) {
-        self.0[x] = true
+        self.bit |= 1 << x;
     }
     pub fn delete(&mut self, x: usize) -> bool {
-        replace(&mut self.0[x], false)
-    }
-    pub fn collect_bitvec(&self) -> Vec<bool> {
-        let mut vec = vec![false; self.len()];
-        self.copy_bitvec(&mut vec);
-        vec
-    }
-    pub fn copy_bitvec(&self, vec: &mut [bool]) {
-        vec[0] |= self.0[0];
-        vec[1] |= self.0[1];
+        let res = self.contains(x);
+        if res {
+            self.bit ^= 1 << x;
+        }
+        res
     }
 }
 #[derive(Debug, Clone, PartialEq)]
@@ -317,21 +309,6 @@ impl Rec {
             false
         }
     }
-    pub fn collect_bitvec(&self) -> Vec<bool> {
-        let mut vec = vec![false; self.len()];
-        self.copy_bitvec(&mut vec);
-        vec
-    }
-    pub fn copy_bitvec(&self, vec: &mut [bool]) {
-        if let Some((min, max)) = self.minmax {
-            vec[min] = true;
-            vec[max] = true;
-        }
-        self.cluster.iter().enumerate().for_each(|(i, child)| {
-            let range = child.len() * i..child.len() * (i + 1);
-            child.copy_bitvec(&mut vec[range])
-        });
-    }
 }
 fn index(high: usize, low: usize, lower: u32) -> usize {
     (high << lower) + low
@@ -339,7 +316,7 @@ fn index(high: usize, low: usize, lower: u32) -> usize {
 fn decompose(x: usize, lower: u32) -> (usize, usize) {
     (
         x >> lower,
-        x & (std::usize::MAX >> (std::mem::size_of::<usize>() as u32 * 8 - lower)),
+        x & (std::usize::MAX >> (size_of::<usize>() as u32 * 8 - lower)),
     )
 }
 
@@ -381,24 +358,80 @@ mod test {
     #[test]
     fn test_speed() {
         let mut rng = StdRng::seed_from_u64(42);
-        let lg = 16;
+        let lg = 24;
         let start = Instant::now();
         let mut veb = Veb::new(lg);
         let end = Instant::now();
         println!("Construction: {:?}", end - start);
 
         let len = 1 << lg;
-        let q = 100_000;
+        let q = 1_000_000;
         let start = Instant::now();
         for _ in 0..q {
             match rng.gen_range(0, 7) {
-                0 => drop(veb.contains(rng.gen_range(0, len))),
-                1 => drop(veb.min()),
-                2 => drop(veb.max()),
-                3 => drop(veb.prev(rng.gen_range(0, len))),
-                4 => drop(veb.succ(rng.gen_range(0, len))),
-                5 => drop(veb.insert(rng.gen_range(0, len))),
-                6 => drop(veb.delete(rng.gen_range(0, len))),
+                0 => {
+                    veb.contains(rng.gen_range(0, len));
+                }
+                1 => {
+                    veb.min();
+                }
+                2 => {
+                    veb.max();
+                }
+                3 => {
+                    veb.prev(rng.gen_range(0, len));
+                }
+                4 => {
+                    veb.succ(rng.gen_range(0, len));
+                }
+                5 => {
+                    veb.insert(rng.gen_range(0, len));
+                }
+                6 => {
+                    veb.delete(rng.gen_range(0, len));
+                }
+                _ => unreachable!(),
+            }
+        }
+        let end = Instant::now();
+        println!("{} Queries: {:?}", q, end - start);
+    }
+
+    #[test]
+    fn test_speed_btree() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let lg = 24;
+        let start = Instant::now();
+        let mut bts = BTreeSet::new();
+        let end = Instant::now();
+        println!("Construction: {:?}", end - start);
+
+        let len = 1 << lg;
+        let q = 1_000_000;
+        let start = Instant::now();
+        for _ in 0..q {
+            match rng.gen_range(0, 7) {
+                0 => {
+                    bts.contains(&rng.gen_range(0, len));
+                }
+                1 => {
+                    bts.iter().next();
+                }
+                2 => {
+                    bts.iter().rev().next();
+                }
+                3 => {
+                    bts.range(..rng.gen_range(0, len)).rev().next();
+                }
+                4 => {
+                    bts.range(rng.gen_range(0, len) + 1..).next();
+                }
+                5 => {
+                    bts.insert(rng.gen_range(0, len));
+                }
+                6 => {
+                    bts.remove(&rng.gen_range(0, len));
+                }
                 _ => unreachable!(),
             }
         }
